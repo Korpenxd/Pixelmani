@@ -128,17 +128,31 @@ export default function KontaktPage() {
                     required
                     rows={5}
                     value={formData.meddelande}
-                    onChange={(e) => setFormData({ ...formData, meddelande: e.target.value })}
+                    onChange={(e) => {
+                      setFormData({
+                        ...formData,
+                        meddelande: e.target.value,
+                      })
+
+                      e.currentTarget.style.height = 'auto'
+                      e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`
+                    }}
                     style={{
                       ...inputStyle,
                       borderBottom: 'none',
                       border: '1px solid #333',
                       padding: '0.75rem',
-                      resize: 'vertical',
+                      resize: 'none',
+                      overflow: 'hidden',
                       minHeight: '120px',
+                      boxSizing: 'border-box',
                     }}
-                    onFocus={(e) => (e.currentTarget.style.borderColor = '#fff')}
-                    onBlur={(e) => (e.currentTarget.style.borderColor = '#333')}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#fff'
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#333'
+                    }}
                   />
                 </div>
 

@@ -702,15 +702,15 @@ function getCategoryLabel(key: string) {
     <>
     <Navbar />
     <main
+      className="admin-page"
       style={{
         minHeight: '100vh',
         background: '#111',
         color: '#fff',
-        padding: '7rem clamp(2rem, 5vw, 4rem)',
       }}
     >
-      <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
-        <header
+      <div className="admin-container" style={{ maxWidth: '1100px', margin: '0 auto' }}>
+        <header className="admin-header"
           style={{
             display: 'flex',
             justifyContent: 'space-between',
@@ -734,7 +734,7 @@ function getCategoryLabel(key: string) {
           </div>
 
           {storageUsage && (
-            <div
+            <div className="admin-storage-panel"
               style={{
                 marginTop: '1.5rem',
                 padding: '1rem',
@@ -776,6 +776,8 @@ function getCategoryLabel(key: string) {
           )}
 
           <button
+            className='admin-header-button'
+            type="button"
             onClick={loadPhotos}
             style={{
               background: 'transparent',
@@ -997,7 +999,8 @@ function getCategoryLabel(key: string) {
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+                gridTemplateColumns:
+  'repeat(auto-fill, minmax(min(100%, 220px), 1fr))',
                 gap: '0.75rem',
                 marginBottom: '1rem',
               }}
@@ -1093,17 +1096,17 @@ function getCategoryLabel(key: string) {
         </section>
 
         <div
+  className="admin-management-grid"
   style={{
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 3fr) minmax(240px, 1fr)',
     gap: '1rem',
     alignItems: 'stretch',
     marginBottom: '3rem',
   }}
-  className="admin-management-grid"
 >
   {/* Category management */}
   <section
+  className="admin-category-panel"
     style={{
       border: '1px solid #252525',
       background: '#151515',
@@ -1122,6 +1125,7 @@ function getCategoryLabel(key: string) {
     </h2>
 
     <div
+      className="admin-category-form"
       style={{
         display: 'flex',
         gap: '0.75rem',
@@ -1130,6 +1134,7 @@ function getCategoryLabel(key: string) {
       }}
     >
       <input
+        className='admin-category-input'
         value={newCategoryLabel}
         onChange={(e) => setNewCategoryLabel(e.target.value)}
         onKeyDown={(e) => {
@@ -1146,6 +1151,7 @@ function getCategoryLabel(key: string) {
       />
 
       <button
+        className="admin-category-add-button"
         type="button"
         onClick={handleAddCategory}
         disabled={categoryLoading || !newCategoryLabel.trim()}
@@ -1176,6 +1182,7 @@ function getCategoryLabel(key: string) {
       {categories.map((cat) => (
         <div
           key={cat.key}
+          className="admin-category-chip"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -1183,12 +1190,16 @@ function getCategoryLabel(key: string) {
             border: '1px solid #333',
             padding: '0.65rem 0.85rem',
             background: '#111',
+            minWidth: 0,
+            maxWidth: '100%',
           }}
         >
           <span
             style={{
               color: '#aaa',
               fontSize: '0.8rem',
+              overflowWrap: 'anywhere',
+              minWidth: 0,
             }}
           >
             {cat.label}
@@ -1206,11 +1217,12 @@ function getCategoryLabel(key: string) {
                 background: 'transparent',
                 color: '#ff6b6b',
                 border: 'none',
-                cursor: categoryLoading
-                  ? 'not-allowed'
-                  : 'pointer',
-                fontSize: '0.8rem',
-                padding: 0,
+                cursor: categoryLoading ? 'not-allowed' : 'pointer',
+                fontSize: '1.1rem',
+                padding: '0.2rem 0.35rem',
+                flexShrink: 0,
+                minWidth: '32px',
+                minHeight: '32px',
               }}
             >
               ×
@@ -1223,14 +1235,16 @@ function getCategoryLabel(key: string) {
 
   {/* Hero editor */}
       <section
-  style={{
-    border: '1px solid #252525',
-    background: '#151515',
-    padding: '1rem',
-    display: 'flex',
-    flexDirection: 'column',
-  }}
->
+      className="admin-hero-panel"
+      style={{
+        border: '1px solid #252525',
+        background: '#151515',
+        padding: 'clamp(1rem, 4vw, 1.5rem)',
+        display: 'flex',
+        flexDirection: 'column',
+        minWidth: 0,
+      }}
+    >
   <h2
     style={{
       fontWeight: 300,
@@ -1242,9 +1256,12 @@ function getCategoryLabel(key: string) {
   </h2>
 
   <div
+    className="admin-hero-preview"
     style={{
       position: 'relative',
-      aspectRatio: '4 / 3',
+      aspectRatio: '16 / 10',
+      width: '100%',
+      minHeight: 0,
       overflow: 'hidden',
       background: '#0b0b0b',
       marginBottom: '1rem',
@@ -1357,6 +1374,7 @@ function getCategoryLabel(key: string) {
 
         <section>
           <div
+            className="admin-photo-list-header"
             style={{
               display: 'flex',
               justifyContent: 'space-between',
@@ -1376,12 +1394,13 @@ function getCategoryLabel(key: string) {
             </h2>
 
             <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-            flexWrap: 'wrap',
-          }}
+            className="admin-photo-list-actions"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              flexWrap: 'wrap',
+            }}
         >
           <span style={{ color: '#666', fontSize: '0.85rem' }}>
             {photos.length} foton
@@ -1441,7 +1460,8 @@ function getCategoryLabel(key: string) {
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gridTemplateColumns:
+  'repeat(auto-fill, minmax(min(100%, 220px), 1fr))',
                 gap: '1rem',
               }}
             >
@@ -1666,9 +1686,13 @@ function getCategoryLabel(key: string) {
 }
 
 const inputStyle: React.CSSProperties = {
+  width: '100%',
+  minWidth: 0,
+  maxWidth: '100%',
+  boxSizing: 'border-box',
   background: '#111',
   color: '#fff',
   border: '1px solid #333',
   padding: '0.8rem 1rem',
-  fontSize: '0.9rem',
+  fontSize: '16px',
 }

@@ -6,28 +6,54 @@ import { getHeroImageUrl } from '@/lib/supabase'
 
 export default function Hero() {
   const [heroImageUrl, setHeroImageUrl] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [heroLoaded, setHeroLoaded] = useState(false)
 
-  useEffect(() => {
-    let active = true
+ useEffect(() => {
+  let active = true
+  let image: HTMLImageElement | null = null
 
-    async function loadHeroImage() {
-      const url = await getHeroImageUrl()
+  async function loadHeroImage() {
+    const url = await getHeroImageUrl()
 
-      console.log('Loaded hero image URL:', url)
+    if (!active || !url) {
+      return
+    }
 
+    image = new Image()
+    image.src = url
+
+    image.onload = () => {
       if (!active) return
 
       setHeroImageUrl(url)
-      setLoading(false)
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (active) {
+            setHeroLoaded(true)
+          }
+        })
+      })
     }
 
-    loadHeroImage()
+    image.onerror = () => {
+      if (!active) return
 
-    return () => {
-      active = false
+      console.error('Kunde inte ladda hero-bilden')
     }
-  }, [])
+  }
+
+  loadHeroImage()
+
+  return () => {
+    active = false
+
+    if (image) {
+      image.onload = null
+      image.onerror = null
+    }
+  }
+}, [])
 
   return (
     <section
@@ -57,8 +83,11 @@ export default function Hero() {
           backgroundPosition: 'center',
           backgroundRepeat: 'no-repeat',
           filter: 'brightness(0.55)',
-          opacity: loading ? 0 : 1,
-          transition: 'opacity 0.4s ease',
+          opacity: heroLoaded ? 1 : 0,
+          transform: heroLoaded ? 'scale(1)' : 'scale(1.015)',
+          transition:
+            'opacity 0.7s ease, transform 1.2s ease',
+          willChange: 'opacity, transform',
         }}
       />
 
