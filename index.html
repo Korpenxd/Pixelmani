@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PixelMani – Fotografi utan nisch</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    :root{--bg-dark:#0a0a0a;--bg-light:#f5f5f5;--text-light:#fff;--text-dark:#1a1a1a}
+    body{font-family:Segoe UI,system-ui,-apple-system,sans-serif;background:var(--bg-dark);color:var(--text-light);line-height:1.6}
+    header{position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;padding:1.2rem 2rem;z-index:1000}
+    .logo{font-size:.9rem;letter-spacing:3px}
+    .menu-btn{display:flex;flex-direction:column;gap:5px;border:none;background:none;cursor:pointer}
+    .menu-btn span{width:24px;height:2px;background:#fff}
+    .nav-overlay{position:fixed;inset:0;background:rgba(0,0,0,.95);display:none;justify-content:center;align-items:center;z-index:999}
+    .nav-overlay.active{display:flex}
+    .close-menu{position:absolute;top:1.2rem;right:2rem;border:none;background:none;color:#fff;font-size:2rem;cursor:pointer}
+    .nav-menu{list-style:none;text-align:center}
+    .nav-menu a{color:#fff;text-decoration:none;font-size:1.8rem;letter-spacing:2px;display:block;margin:1rem 0;opacity:.9}
+    .hero{height:100vh;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    .hero-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.7}
+    .hero-content{position:relative;z-index:1;padding:0 2rem;max-width:640px}
+    .hero h1{font-size:3rem;font-weight:300;margin-bottom:1rem}
+    .btn{display:inline-block;padding:.8rem 1.4rem;border:1px solid #fff;color:#fff;text-decoration:none;font-size:.9rem;letter-spacing:1px;background:transparent;cursor:pointer}
+    section{padding:4.5rem 2rem}
+    .section-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.4rem}
+    .section-title{font-size:.9rem;letter-spacing:3px}
+    .section-link{color:#fff;text-decoration:none;opacity:.8}
+    .image-grid,.showcase-grid{display:grid;gap:1rem}
+    .image-grid{grid-template-columns:repeat(4,1fr)}
+    .showcase-grid{grid-template-columns:repeat(3,1fr)}
+    .image-grid img,.showcase-grid img{width:100%;aspect-ratio:4/3;object-fit:cover;cursor:pointer;transition:transform .25s}
+    .showcase-header{text-align:center;margin-bottom:2rem}
+    .showcase-header h2{font-size:2.2rem;letter-spacing:8px;font-weight:300}
+    .tabs{display:flex;justify-content:center;gap:1.5rem;margin-bottom:2rem}
+    .tab{border:none;background:none;color:#fff;letter-spacing:2px;opacity:.6;cursor:pointer;padding:.4rem 0;border-bottom:2px solid transparent}
+    .tab.active,.tab:hover{opacity:1;border-bottom-color:#fff}
+    .admin-bar{display:flex;justify-content:flex-end;gap:.5rem;align-items:center;margin-bottom:1rem}
+    .admin-pill{font-size:.8rem;opacity:.8}
+    .upload-section{display:none;background:#111;border:1px solid #222;border-radius:8px;padding:2rem;margin-top:1rem}
+    .upload-section.active{display:block}
+    .upload-area{border:2px dashed #333;border-radius:8px;padding:2rem;text-align:center;margin-bottom:1rem}
+    .form-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+    .form-group{margin-bottom:1rem}
+    .form-group label{display:block;margin-bottom:.4rem;opacity:.8}
+    .form-group input,.form-group select{width:100%;padding:.7rem;border:1px solid #333;background:#1a1a1a;border-radius:4px;color:#fff}
+    .pricing{background:var(--bg-light);color:var(--text-dark)}
+    .pricing-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.2rem;max-width:980px;margin:0 auto}
+    .price-card{border:1px solid #ddd;padding:1.6rem;text-align:center}
+    .contact{display:grid;grid-template-columns:1fr 1fr;gap:3rem}
+    .contact input,.contact textarea{width:100%;padding:.8rem;border:1px solid #333;background:transparent;color:#fff;border-radius:4px;margin-bottom:.8rem}
+    footer{display:flex;justify-content:space-between;align-items:center;padding:1.6rem 2rem;border-top:1px solid #222;font-size:.9rem}
+    .lightbox{position:fixed;inset:0;background:rgba(0,0,0,.96);display:none;justify-content:center;align-items:center;z-index:2000}
+    .lightbox.active{display:flex}
+    .lightbox-image{max-width:90vw;max-height:85vh;object-fit:contain}
+    .lightbox-close,.lightbox-nav{position:absolute;border:none;background:none;color:#fff;cursor:pointer;opacity:.7}
+    .lightbox-close{top:1rem;right:1rem;font-size:2rem}
+    .lightbox-nav{top:50%;transform:translateY(-50%);font-size:2rem;padding:1rem}
+    .lightbox-prev{left:1rem}.lightbox-next{right:1rem}
+    .toast{position:fixed;right:1rem;bottom:1rem;background:#2a2a2a;color:#fff;padding:1rem 1.2rem;border-left:4px solid #4caf50;border-radius:8px;opacity:0;transform:translateY(10px);transition:.25s}
+    .toast.show{opacity:1;transform:translateY(0)}
+    @media(max-width:1024px){.image-grid,.showcase-grid{grid-template-columns:repeat(2,1fr)}.pricing-grid{grid-template-columns:1fr}}
+    @media(max-width:768px){header{padding:1rem 1.2rem}.image-grid,.showcase-grid{grid-template-columns:1fr}.form-row{grid-template-columns:1fr}.contact{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">PIXELMANI</div>
+    <button class="menu-btn" onclick="toggleMenu()"><span></span><span></span><span></span></button>
+  </header>
+
+  <nav class="nav-overlay" id="navOverlay">
+    <button class="close-menu" onclick="toggleMenu()">×</button>
+    <ul class="nav-menu">
+      <li><a href="#home" onclick="toggleMenu()">Hem</a></li>
+      <li><a href="#showcase" onclick="toggleMenu()">Showcase</a></li>
+      <li><a href="#pricing" onclick="toggleMenu()">Priser</a></li>
+      <li><a href="#contact" onclick="toggleMenu()">Kontakt</a></li>
+    </ul>
+  </nav>
+
+  <section class="hero" id="home">
+    <img class="hero-bg" src="[images.unsplash.com](https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=1920&q=80&auto=format&fit=crop)" alt="Fjällsjö">
+    <div class="hero-content">
+      <h1>Fotografi utan nisch.</h1>
+      <p>Bara bilder jag tycker är värda att visa.</p>
+      <a href="#showcase" class="btn">VISA BILDER</a>
+    </div>
+  </section>
+
+  <section id="senaste">
+    <div class="section-header">
+      <h2 class="section-title">SENASTE BILDER</h2>
+      <a class="section-link" href="#showcase">SE ALLA →</a>
+    </div>
+    <div class="image-grid" id="latestGrid"></div>
+  </section>
+
+  <section class="showcase" id="showcase">
+    <div class="showcase-header">
+      <h2>SHOWCASE</h2>
+      <p>En samling fotografier.</p>
+    </div>
+
+    <div class="admin-bar">
+      <span class="admin-pill" id="adminStatus">Läge: Besökare</span>
+      <button class="btn" id="adminToggle">ADMINLÄGE</button>
+    </div>
+
+    <div class="upload-section" id="uploadSection" aria-hidden="true">
+      <h3>Ladda upp ny bild (endast admin)</h3>
+      <div class="upload-area" id="uploadArea">Dra in en bild här eller välj fil nedan</div>
+      <input type="file" id="fileInput" accept="image/*">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="imageTitle">Titel</label>
+          <input id="imageTitle" placeholder="T.ex. Fjällsjö">
+        </div>
+        <div class="form-group">
+          <label for="imageCategory">Kategori</label>
+          <select id="imageCategory">
+            <option value="natur">Natur</option>
+            <option value="stad">Stad</option>
+            <option value="experiment">Experiment</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="imageDate">Datum</label>
+        <input id="imageDate" placeholder="T.ex. Maj 2026">
+      </div>
+      <button class="btn" id="uploadBtn">LADDA UPP BILD</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" data-category="all">ALLA</button>
+      <button class="tab" data-category="natur">NATUR</button>
+      <button class="tab" data-category="stad">STAD</button>
+      <button class="tab" data-category="experiment">EXPERIMENT</button>
+    </div>
+    <div class="showcase-grid" id="showcaseGrid"></div>
+  </section>
+
+  <section class="pricing" id="pricing">
+    <div style="text-align:center;margin-bottom:1.6rem">
+      <h2 style="font-weight:300;letter-spacing:8px">PRISER</h2>
+      <p>Tekniskt sett finns de.</p>
+    </div>
+    <div class="pricing-grid">
+      <div class="price-card"><h3>Kaffepaketet</h3><div class="price">49 999 kr</div><div class="note">5 bilder. Kanske.</div></div>
+      <div class="price-card"><h3>Eventpaketet</h3><div class="price">249 999 kr</div><div class="note">Om jag känner för det.</div></div>
+      <div class="price-card"><h3>Bröllop</h3><div class="price">999 999 kr</div><div class="note">Nej.</div></div>
+    </div>
+    <p style="text-align:center;opacity:.7;margin-top:1rem">Dessa priser är avsiktligt absurda. PixelMani är ett hobbyprojekt.</p>
+  </section>
+
+  <section id="contact">
+    <div class="contact">
+      <div>
+        <h2 style="font-weight:300;letter-spacing:4px">KONTAKT</h2>
+        <p style="opacity:.75">Har du frågor om en bild, fototeknik eller bara vill säga hej?</p>
+        <p><a href="mailto:hej@pixelmani.se" style="color:#fff;text-decoration:none">hej@pixelmani.se</a><br>
+        <a href="[instagram.com](https://instagram.com)" target="_blank" style="color:#fff;text-decoration:none">@pixelmani</a></p>
+      </div>
+      <form onsubmit="event.preventDefault();toast('Tack för ditt meddelande!')">
+        <input placeholder="Namn" required>
+        <input type="email" placeholder="Email" required>
+        <textarea placeholder="Meddelande" rows="6" required></textarea>
+        <button class="btn" type="submit">SKICKA</button>
+      </form>
+    </div>
+  </section>
+
+  <footer>
+    <div class="logo">PIXELMANI</div>
+    <div>Instagram • Kontakt • © 2026</div>
+  </footer>
+
+  <div class="lightbox" id="lightbox">
+    <button class="lightbox-close" onclick="closeLightbox()">×</button>
+    <button class="lightbox-nav lightbox-prev" onclick="navLightbox(-1)">‹</button>
+    <img id="lightboxImage" class="lightbox-image" alt="">
+    <button class="lightbox-nav lightbox-next" onclick="navLightbox(1)">›</button>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // Pre-filled images (free stock: Unsplash). Photo credit is handled by Unsplash license.
+    let images = [
+      // Natur
+      {id:1,src:'[images.unsplash.com](https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=1200&q=80&auto=format&fit=crop)',title:'Dimhöljda fjäll',category:'natur',date:'Maj 2024'},
+      {id:2,src:'[images.unsplash.com](https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1200&q=80&auto=format&fit=crop)',title:'Tallskog',category:'natur',date:'Juni 2024'},
+      {id:3,src:'[images.unsplash.com](https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=1200&q=80&auto=format&fit=crop)',title:'Vattenfall',category:'natur',date:'Juli 2024'},
+      {id:4,src:'[images.unsplash.com](https://images.unsplash.com/photo-1508264165352-258a6c5a1f3b?w=1200&q=80&auto=format&fit=crop)',title:'Sjö och dal',category:'natur',date:'Aug 2024'},
+      {id:5,src:'[images.unsplash.com](https://images.unsplash.com/photo-1444703686981-a3abbc4d4fe3?w=1200&q=80&auto=format&fit=crop)',title:'Norrsken',category:'natur',date:'Sept 2024'},
+      {id:6,src:'[images.unsplash.com](https://images.unsplash.com/photo-1476610182048-b716b8518aae?w=1200&q=80&auto=format&fit=crop)',title:'Räv i skogen',category:'natur',date:'Okt 2024'},
+      // Stad
+      {id:7,src:'[images.unsplash.com](https://images.unsplash.com/photo-1467269204594-9661b134dd2b?w=1200&q=80&auto=format&fit=crop)',title:'Stenstad',category:'stad',date:'Mars 2024'},
+      {id:8,src:'[images.unsplash.com](https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=1200&q=80&auto=format&fit=crop)',title:'Bro i dimma',category:'stad',date:'April 2024'},
+      {id:9,src:'[images.unsplash.com](https://images.unsplash.com/photo-1508057198894-247b23fe5ade?w=1200&q=80&auto=format&fit=crop)',title:'Kvällsljus',category:'stad',date:'Maj 2024'},
+      {id:10,src:'[images.unsplash.com](https://images.unsplash.com/photo-1472214103451-9374bd1c798e?w=1200&q=80&auto=format&fit=crop)',title:'Kurvigt betong',category:'stad',date:'Juni 2024'},
+      // Experiment
+      {id:11,src:'[images.unsplash.com](https://images.unsplash.com/photo-1441966767772-12e58a3b29d1?w=1200&q=80&auto=format&fit=crop)',title:'Droppar',category:'experiment',date:'Nov 2024'},
+      {id:12,src:'[images.unsplash.com](https://images.unsplash.com/photo-1472214103451-9374bd1c799e?w=1200&q=80&auto=format&fit=crop)',title:'Abstrakt fasad',category:'experiment',date:'Dec 2024'}
+    ];
+
+    let currentCategory = 'all';
+    let currentIndex = 0;
+    let isAdmin = false;
+    const latestGrid = document.getElementById('latestGrid');
+    const showcaseGrid = document.getElementById('showcaseGrid');
+
+    function render() {
+      // Latest: 8 newest
+      const latest = images.slice(-8).reverse();
+      latestGrid.innerHTML = latest.map(img =>
+        `<img src="${img.src}" alt="${img.title}" onclick="openLightbox(${images.indexOf(img)})">`
+      ).join('');
+
+      // Showcase filter
+      const list = currentCategory==='all' ? images : images.filter(i=>i.category===currentCategory);
+      showcaseGrid.innerHTML = list.map(img =>
+        `<img src="${img.src}" alt="${img.title}" onclick="openLightbox(${images.indexOf(img)})">`
+      ).join('');
+    }
+
+    // Tabs
+    document.querySelectorAll('.tab').forEach(b=>{
+      b.addEventListener('click',()=>{
+        document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+        b.classList.add('active');
+        currentCategory = b.dataset.category;
+        render();
+      });
+    });
+
+    // Lightbox
+    function openLightbox(i){ currentIndex=i; document.getElementById('lightboxImage').src=images[i].src; document.getElementById('lightbox').classList.add('active'); document.body.style.overflow='hidden';}
+    function closeLightbox(){ document.getElementById('lightbox').classList.remove('active'); document.body.style.overflow='';}
+    function navLightbox(dir){ currentIndex=(currentIndex+dir+images.length)%images.length; document.getElementById('lightboxImage').src=images[currentIndex].src;}
+    document.addEventListener('keydown',e=>{ const lb=document.getElementById('lightbox'); if(!lb.classList.contains('active'))return; if(e.key==='Escape')closeLightbox(); if(e.key==='ArrowLeft')navLightbox(-1); if(e.key==='ArrowRight')navLightbox(1);});
+
+    // Admin gate (demo: prompt for passphrase)
+    const adminToggle = document.getElementById('adminToggle');
+    const adminStatus = document.getElementById('adminStatus');
+    const uploadSection = document.getElementById('uploadSection');
+    adminToggle.addEventListener('click', ()=>{
+      if(!isAdmin){
+        const code = prompt('Ange adminlösenord (demo):');
+        if(code && code.toLowerCase().trim()==='adminläge'){ isAdmin=true; toast('Adminläge aktiverat'); }
+        else { toast('Fel lösenord'); return; }
+      } else {
+        isAdmin=false; toast('Adminläge avstängt');
+      }
+      adminStatus.textContent = 'Läge: ' + (isAdmin?'Admin':'Besökare');
+      uploadSection.classList.toggle('active', isAdmin);
+      uploadSection.setAttribute('aria-hidden', (!isAdmin).toString());
+    });
+
+    // Upload (admin only, client-side)
+    const fileInput = document.getElementById('fileInput');
+    const uploadArea = document.getElementById('uploadArea');
+    const uploadBtn = document.getElementById('uploadBtn');
+
+    ;['dragenter','dragover','dragleave','drop'].forEach(ev=>{
+      uploadArea.addEventListener(ev, e=>{ e.preventDefault(); e.stopPropagation(); });
+    });
+    uploadArea.addEventListener('drop', e=>{
+      if(!isAdmin){ toast('Endast admin kan ladda upp'); return; }
+      const f=e.dataTransfer.files[0]; if(f && f.type.startsWith('image/')) fileInput.files = e.dataTransfer.files;
+    });
+
+    uploadBtn.addEventListener('click', ()=>{
+      if(!isAdmin){ toast('Endast admin kan ladda upp'); return; }
+      const file = fileInput.files[0];
+      if(!file){ toast('Välj en bild'); return; }
+      const reader = new FileReader();
+      reader.onload = ev=>{
+        const img = {
+          id: Date.now(),
+          src: ev.target.result,
+          title: document.getElementById('imageTitle').value || 'Utan titel',
+          category: document.getElementById('imageCategory').value,
+          date: document.getElementById('imageDate').value || 'Idag'
+        };
+        images.push(img);
+        fileInput.value=''; document.getElementById('imageTitle').value=''; document.getElementById('imageDate').value='';
+        render();
+        toast('Bilden uppladdad');
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // Menu + smooth scroll
+    function toggleMenu(){ document.getElementById('navOverlay').classList.toggle('active'); }
+    document.querySelectorAll('a[href^="#"]').forEach(a=>a.addEventListener('click',e=>{ e.preventDefault(); const t=document.querySelector(a.getAttribute('href')); if(t) t.scrollIntoView({behavior:'smooth'});}));
+
+    // Toast
+    function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200); }
+
+    // Init
+    document.addEventListener('DOMContentLoaded', render);
+  </script>
+</body>
+</html>
