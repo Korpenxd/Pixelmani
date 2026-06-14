@@ -1,30 +1,59 @@
+import type { Metadata } from 'next'
+
 import Navbar from '@/components/Navbar'
 import Hero from '@/components/Hero'
 import LatestPhotos from '@/components/LatestPhotos'
 import Prices from '@/components/Prices'
-import type { Metadata } from 'next'
-import AdminLogin from '@/components/AdminLogin'
-import AdminDashboard from '@/components/AdminDashboard'
-import { isAdminRequest } from '@/lib/adminAuth'
+import StructuredData from '@/components/StructuredData'
+import Footer from '@/components/Footer'
 
-export default function HomePage() {
+import { getHeroImageUrl } from '@/lib/supabase'
+
+export const dynamic = 'force-dynamic'
+
+export const metadata: Metadata = {
+  title: 'Fotografi utan nisch',
+
+  description:
+    'Utforska Per-Arne Hederstafs personliga fotografier av natur, stadsmiljöer och experimentella motiv på Pixelmani.',
+
+  alternates: {
+    canonical: '/',
+  },
+
+  openGraph: {
+    title: 'Pixelmani – Fotografi av Per-Arne Hederstaf',
+    description:
+      'Natur, stadsmiljöer och experimentella motiv samlade i ett personligt fotogalleri.',
+    url: '/',
+    type: 'website',
+  },
+
+  robots: {
+    index: true,
+    follow: true,
+  },
+}
+
+export default async function HomePage() {
+  const heroImageUrl = await getHeroImageUrl()
+
+  const siteUrl =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    'https://pixelmani-5sm4.vercel.app'
+
   return (
     <>
+      <StructuredData siteUrl={siteUrl} />
+
       <Navbar />
+
       <main>
-        <Hero />
+        <Hero heroImageUrl={heroImageUrl} />
         <LatestPhotos />
         <Prices />
       </main>
+      <Footer />
     </>
   )
-}
-
-export const metadata: Metadata = {
-  title: 'Admin',
-  robots: {
-    index: false,
-    follow: false,
-    noarchive: true,
-  },
 }

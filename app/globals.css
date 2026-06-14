@@ -154,6 +154,16 @@ button { cursor: pointer; font-family: inherit; }
   }
 }
 
+.contact-section {
+  scroll-margin-top: 6rem;
+}
+
+@media (max-width: 768px) {
+  .contact-section {
+    scroll-margin-top: 6.5rem;
+  }
+}
+
 .footer-credit {
   font-size: 0.68rem;
   letter-spacing: 0.08em;

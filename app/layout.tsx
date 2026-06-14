@@ -1,32 +1,38 @@
 import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
+import AdminSessionGuard from '@/components/AdminSessionGuard'
 
-const inter = Inter({ subsets: ['latin'] })
+const inter = Inter({
+  subsets: ['latin'],
+  display: 'swap',
+})
 
 const siteUrl =
-  process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  'https://pixelmani-5sm4.vercel.app'
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
 
   title: {
-    default: 'Pixelmani – Fotografi av Adam Ström',
+    default: 'Pixelmani – Fotografi av Per-Arne Hederstaf',
     template: '%s | Pixelmani',
   },
 
   description:
-    'Ett personligt fotografiarkiv av Adam Ström med naturbilder, stadsfotografi och experimentella motiv.',
+    'Pixelmani är Per-Arne Hederstafs personliga fotogalleri med naturfotografi, stadsmiljöer och experimentella motiv.',
 
   applicationName: 'Pixelmani',
 
   authors: [
     {
-      name: 'Adam Ström',
+      name: 'Per-Arne Hederstaf',
+      url: siteUrl,
     },
   ],
 
-  creator: 'Adam Ström',
+  creator: 'Per-Arne Hederstaf',
   publisher: 'Pixelmani',
 
   alternates: {
@@ -38,24 +44,24 @@ export const metadata: Metadata = {
     locale: 'sv_SE',
     url: '/',
     siteName: 'Pixelmani',
-    title: 'Pixelmani – Fotografi av Adam Ström',
+    title: 'Pixelmani – Fotografi av Per-Arne Hederstaf',
     description:
-      'Natur, stad och experimentell fotografi samlad i ett personligt bildarkiv.',
+      'Ett personligt fotogalleri med natur, stadsmiljöer och experimentell fotografi.',
     images: [
       {
         url: '/opengraph-image.jpg',
         width: 1200,
         height: 630,
-        alt: 'Pixelmani – fotografi av Adam Ström',
+        alt: 'Pixelmani – fotografi av Per-Arne Hederstaf',
       },
     ],
   },
 
   twitter: {
     card: 'summary_large_image',
-    title: 'Pixelmani – Fotografi av Adam Ström',
+    title: 'Pixelmani – Fotografi av Per-Arne Hederstaf',
     description:
-      'Natur, stad och experimentell fotografi samlad i ett personligt bildarkiv.',
+      'Ett personligt fotogalleri med natur, stadsmiljöer och experimentell fotografi.',
     images: ['/opengraph-image.jpg'],
   },
 
@@ -66,20 +72,31 @@ export const metadata: Metadata = {
       index: true,
       follow: true,
       'max-image-preview': 'large',
+      'max-snippet': -1,
+      'max-video-preview': -1,
     },
   },
+
+  category: 'photography',
 }
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  themeColor: '#070707',
 }
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode
+}>) {
   return (
     <html lang="sv">
-      <body className={inter.className}>{children}</body>
+      <body className={inter.className}>
+        <AdminSessionGuard />
+        {children}
+      </body>
     </html>
   )
 }
-

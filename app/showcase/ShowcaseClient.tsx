@@ -10,6 +10,7 @@ import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
 import Lightbox from '@/components/Lightbox'
 import ContactSection from '@/components/ContactSection'
+import Image from 'next/image'
 import {
   useAllPhotos,
   usePhotosByCategory,
@@ -27,6 +28,41 @@ function PhotoGrid({ category }: { category: string }) {
 
   const { photos, loading } =
     category === 'all' ? allHook : catHook
+
+  useEffect(() => {
+    if (loading) return
+
+    if (window.location.hash !== '#ContactSection') {
+      return
+    }
+
+    const scrollToContact = () => {
+      const contactSection =
+        document.getElementById('ContactSection')
+
+      if (!contactSection) return
+
+      contactSection.scrollIntoView({
+        behavior: 'auto',
+        block: 'start',
+      })
+    }
+
+    // Wait for React to render all photo rows.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(scrollToContact)
+    })
+
+    // Correct the position once more after mobile layout settles.
+    const correctionTimer = window.setTimeout(
+      scrollToContact,
+      500
+    )
+
+    return () => {
+      window.clearTimeout(correctionTimer)
+    }
+  }, [loading, photos.length])
 
   return (
     <>
@@ -56,6 +92,7 @@ function PhotoGrid({ category }: { category: string }) {
                 type="button"
                 onClick={() => setLightboxIndex(i)}
                 style={{
+                  position: 'relative',
                   aspectRatio: '1',
                   overflow: 'hidden',
                   border: 'none',
@@ -64,23 +101,27 @@ function PhotoGrid({ category }: { category: string }) {
                   background: '#1a1a1a',
                 }}
               >
-                <img
+                <Image
                   src={photo.url}
-                  alt={photo.title || photo.name}
-                  loading="lazy"
+                  alt={photo.title || 'Fotografi av Per-Arne Hederstaf'}
+                  fill
+                  quality={75}
+                  sizes="
+                    (max-width: 480px) 100vw,
+                    (max-width: 768px) 50vw,
+                    (max-width: 1200px) 33vw,
+                    20vw
+                  "
+                  preload={i === 0}
                   style={{
-                    width: '100%',
-                    height: '100%',
                     objectFit: 'cover',
                     transition: 'transform 0.4s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.transform =
-                      'scale(1.06)'
+                    e.currentTarget.style.transform = 'scale(1.06)'
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.transform =
-                      'scale(1)'
+                    e.currentTarget.style.transform = 'scale(1)'
                   }}
                 />
               </button>
@@ -110,9 +151,12 @@ function PhotoGrid({ category }: { category: string }) {
   )
 }
 
+
+
 export default function ShowcaseClient() {
   const [activeCategory, setActiveCategory] =
     useState('all')
+
 
   const [categories, setCategories] =
     useState<Category[]>([])

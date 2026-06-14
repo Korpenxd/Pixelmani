@@ -1,60 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { getHeroImageUrl } from '@/lib/supabase'
+import HeroImage from '@/components/HeroImage'
 
-export default function Hero() {
-  const [heroImageUrl, setHeroImageUrl] = useState<string | null>(null)
-  const [heroLoaded, setHeroLoaded] = useState(false)
+type HeroProps = {
+  heroImageUrl: string | null
+}
 
- useEffect(() => {
-  let active = true
-  let image: HTMLImageElement | null = null
-
-  async function loadHeroImage() {
-    const url = await getHeroImageUrl()
-
-    if (!active || !url) {
-      return
-    }
-
-    image = new Image()
-    image.src = url
-
-    image.onload = () => {
-      if (!active) return
-
-      setHeroImageUrl(url)
-
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (active) {
-            setHeroLoaded(true)
-          }
-        })
-      })
-    }
-
-    image.onerror = () => {
-      if (!active) return
-
-      console.error('Kunde inte ladda hero-bilden')
-    }
-  }
-
-  loadHeroImage()
-
-  return () => {
-    active = false
-
-    if (image) {
-      image.onload = null
-      image.onerror = null
-    }
-  }
-}, [])
-
+export default function Hero({
+  heroImageUrl,
+}: HeroProps) {
   return (
     <section
       id="hero"
@@ -72,24 +27,9 @@ export default function Hero() {
         background: '#111',
       }}
     >
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          backgroundImage: heroImageUrl
-            ? `url("${heroImageUrl}")`
-            : 'none',
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          backgroundRepeat: 'no-repeat',
-          filter: 'brightness(0.55)',
-          opacity: heroLoaded ? 1 : 0,
-          transform: heroLoaded ? 'scale(1)' : 'scale(1.015)',
-          transition:
-            'opacity 0.7s ease, transform 1.2s ease',
-          willChange: 'opacity, transform',
-        }}
-      />
+      {heroImageUrl && (
+        <HeroImage src={heroImageUrl} />
+      )}
 
       <div
         style={{
@@ -153,7 +93,8 @@ export default function Hero() {
             const el = e.currentTarget
             el.style.background = 'transparent'
             el.style.color = '#fff'
-            el.style.borderColor = 'rgba(255,255,255,0.65)'
+            el.style.borderColor =
+              'rgba(255,255,255,0.65)'
           }}
         >
           Visa bilder
@@ -161,6 +102,7 @@ export default function Hero() {
       </div>
 
       <button
+        type="button"
         onClick={() =>
           window.scrollTo({
             top: window.innerHeight,
@@ -179,6 +121,7 @@ export default function Hero() {
           fontSize: '1.4rem',
           animation: 'bounce 2.2s infinite',
           zIndex: 1,
+          cursor: 'pointer',
         }}
       >
         ↓

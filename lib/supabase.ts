@@ -91,7 +91,7 @@ export async function getHeroImageUrl(): Promise<string | null> {
   }
 
   // Prevent the browser from showing a cached previous hero.
-  return `${data.publicUrl}?v=${Date.now()}`
+  return data.publicUrl
 }
 
 
@@ -126,37 +126,4 @@ export async function getCategories(): Promise<Category[]> {
   }
 
   return data
-}
-
-export async function addCategory(label: string) {
-  const key = label
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9åäö-]/gi, '')
-
-  const { error } = await supabase
-    .from('categories')
-    .insert({ key, label })
-
-  if (error) {
-    console.error(error)
-    return false
-  }
-
-  return true
-}
-
-export async function deleteCategory(key: string) {
-  const { error } = await supabase
-    .from('categories')
-    .delete()
-    .eq('key', key)
-
-  if (error) {
-    console.error(error)
-    return false
-  }
-
-  return true
 }

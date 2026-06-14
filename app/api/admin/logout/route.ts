@@ -1,7 +1,14 @@
 import { NextResponse } from 'next/server'
 
 export async function POST() {
-  const response = NextResponse.json({ success: true })
+  const response = NextResponse.json(
+    { success: true },
+    {
+      headers: {
+        'Cache-Control': 'no-store',
+      },
+    }
+  )
 
   response.cookies.set('pixelmani-admin', '', {
     httpOnly: true,
@@ -9,6 +16,7 @@ export async function POST() {
     sameSite: 'strict',
     path: '/',
     expires: new Date(0),
+    maxAge: 0,
   })
 
   return response

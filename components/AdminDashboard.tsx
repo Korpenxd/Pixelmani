@@ -127,13 +127,6 @@ function selectHeroFile(file: File | null) {
     router.refresh()
   }
 
-  function cleanFileName(name: string) {
-    return name
-      .toLowerCase()
-      .replace(/\s+/g, '-')
-      .replace(/[^a-z0-9åäö.-]/gi, '')
-  }
-   
 
 async function uploadFiles(files: File[]) {
   if (!files.length) {
