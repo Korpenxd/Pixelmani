@@ -29,7 +29,7 @@ export default function Footer() {
       <span className="footer-credit">
         Site by{' '}
         <a
-          href="https://birdbrain.it"
+          href="https://youtu.be/dQw4w9WgXcQ"
           target="_blank"
           rel="noopener noreferrer"
           className="footer-credit-link"
