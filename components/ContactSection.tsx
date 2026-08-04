@@ -250,7 +250,6 @@ export default function ContactSection() {
                 }}
                 style={{
                   ...inputStyle,
-                  borderBottom: 'none',
                   border: '1px solid #333',
                   padding: '0.75rem',
                   resize: 'none',

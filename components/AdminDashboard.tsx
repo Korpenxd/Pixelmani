@@ -78,7 +78,7 @@ function selectHeroFile(file: File | null) {
   }
 
   if (file.size > 15 * 1024 * 1024) {
-    alert('Hero-bilden får vara högst 15 MB.')
+    alert('Landningsbilden får vara högst 15 MB.')
     return
   }
 
@@ -312,12 +312,12 @@ async function deletePhoto(photo: Photo) {
 
 async function saveHeroPhoto() {
   if (!heroFile) {
-    alert('Välj en hero-bild först.')
+    alert('Välj en landningsbild först.')
     return
   }
 
   const confirmed = window.confirm(
-    'Vill du ersätta den nuvarande hero-bilden?'
+    'Vill du ersätta den nuvarande landningsbilden?'
   )
 
   if (!confirmed) return
@@ -392,7 +392,7 @@ async function saveHeroPhoto() {
 
     console.error('Hero replacement failed:', message)
 
-    alert(`Kunde inte uppdatera hero-bilden: ${message}`)
+    alert(`Kunde inte uppdatera landningsbilden: ${message}`)
   } finally {
     setSavingHero(false)
   }
@@ -1245,7 +1245,7 @@ function getCategoryLabel(key: string) {
       margin: '0 0 1rem',
     }}
   >
-    Hero-bild
+    Landningsbild
   </h2>
 
   <div
@@ -1263,7 +1263,7 @@ function getCategoryLabel(key: string) {
     {heroPreviewUrl || currentHeroUrl ? (
       <img
         src={heroPreviewUrl || currentHeroUrl || ''}
-        alt="Förhandsvisning av hero-bild"
+        alt="Förhandsvisning av landningsbild"
         style={{
           width: '100%',
           height: '100%',
@@ -1284,7 +1284,7 @@ function getCategoryLabel(key: string) {
           padding: '1rem',
         }}
       >
-        Ingen hero-bild vald
+        Ingen landningsbild vald
       </div>
     )}
 
@@ -1357,7 +1357,7 @@ function getCategoryLabel(key: string) {
       opacity: savingHero ? 0.6 : 1,
     }}
   >
-    {savingHero ? 'Laddar upp...' : 'Spara hero-bild'}
+    {savingHero ? 'Laddar upp...' : 'Spara landningsbild'}
   </button>
 )}
 
