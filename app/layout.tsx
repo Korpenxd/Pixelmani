@@ -6,6 +6,7 @@ import AdminSessionGuard from '@/components/AdminSessionGuard'
 const inter = Inter({
   subsets: ['latin'],
   display: 'swap',
+  preload: false,
 })
 
 const siteUrl =
@@ -92,7 +93,10 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="sv">
+    <html
+      lang="sv"
+      data-scroll-behavior="smooth"
+    >
       <body className={inter.className}>
         <AdminSessionGuard />
         {children}

@@ -18,11 +18,9 @@
         "name": "next"
       }
     ],
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
     }
-    
   },
   "include": [
     "next-env.d.ts",
@@ -30,7 +28,8 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    "**/*.mts"
-, "app/api/admin/logout"  ],
+    "**/*.mts",
+    "app/api/admin/logout"
+  ],
   "exclude": ["node_modules"]
 }
