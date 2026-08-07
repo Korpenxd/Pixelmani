@@ -9,8 +9,6 @@ import Footer from '@/components/Footer'
 
 import { getHeroImageUrl } from '@/lib/supabase'
 
-export const dynamic = 'force-dynamic'
-
 export const metadata: Metadata = {
   title: 'Fotografi utan nisch',
 
