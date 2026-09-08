@@ -2,39 +2,35 @@ import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
 import AdminSessionGuard from '@/components/AdminSessionGuard'
+import { ogImage } from '@/lib/metadata'
+import { allowIndexing, siteConfig, siteUrl } from '@/lib/site'
 
 const inter = Inter({
   subsets: ['latin'],
   display: 'swap',
-  preload: false,
 })
-
-const siteUrl =
-  process.env.NEXT_PUBLIC_SITE_URL ||
-  'https://pixelmani-5sm4.vercel.app'
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
 
   title: {
-    default: 'Pixelmani – Fotografi av Per-Arne Hederstaf',
-    template: '%s | Pixelmani',
+    default: `${siteConfig.name} – fotograf i ${siteConfig.serviceArea}`,
+    template: `%s | ${siteConfig.name}`,
   },
 
-  description:
-    'Pixelmani är Per-Arne Hederstafs personliga fotogalleri med naturfotografi, stadsmiljöer och experimentella motiv.',
+  description: `Pixelmani är fotograf ${siteConfig.photographer} i ${siteConfig.serviceArea}. Porträtt, familjefotografering, modellfoto, boudoir och uppdragsfotografering.`,
 
-  applicationName: 'Pixelmani',
+  applicationName: siteConfig.name,
 
   authors: [
     {
-      name: 'Per-Arne Hederstaf',
+      name: siteConfig.photographer,
       url: siteUrl,
     },
   ],
 
-  creator: 'Per-Arne Hederstaf',
-  publisher: 'Pixelmani',
+  creator: siteConfig.photographer,
+  publisher: siteConfig.name,
 
   alternates: {
     canonical: '/',
@@ -42,41 +38,44 @@ export const metadata: Metadata = {
 
   openGraph: {
     type: 'website',
-    locale: 'sv_SE',
+    locale: siteConfig.locale,
     url: '/',
-    siteName: 'Pixelmani',
-    title: 'Pixelmani – Fotografi av Per-Arne Hederstaf',
-    description:
-      'Ett personligt fotogalleri med natur, stadsmiljöer och experimentell fotografi.',
-    images: [
-      {
-        url: '/opengraph-image.jpg',
-        width: 1200,
-        height: 630,
-        alt: 'Pixelmani – fotografi av Per-Arne Hederstaf',
-      },
-    ],
+    siteName: siteConfig.name,
+    title: `${siteConfig.name} – fotograf i ${siteConfig.serviceArea}`,
+    description: `Porträtt, familjefotografering, modellfoto och boudoir i ${siteConfig.serviceArea}.`,
+    images: [ogImage],
   },
 
   twitter: {
     card: 'summary_large_image',
-    title: 'Pixelmani – Fotografi av Per-Arne Hederstaf',
-    description:
-      'Ett personligt fotogalleri med natur, stadsmiljöer och experimentell fotografi.',
-    images: ['/opengraph-image.jpg'],
+    title: `${siteConfig.name} – fotograf i ${siteConfig.serviceArea}`,
+    description: `Porträtt, familjefotografering, modellfoto och boudoir i ${siteConfig.serviceArea}.`,
+    images: [ogImage.url],
   },
 
-  robots: {
-    index: true,
-    follow: true,
-    googleBot: {
-      index: true,
-      follow: true,
-      'max-image-preview': 'large',
-      'max-snippet': -1,
-      'max-video-preview': -1,
-    },
-  },
+  // Preview deployments are excluded from indexing here as well as in
+  // robots.txt, so a crawler that reaches a preview URL directly still sees a
+  // noindex directive.
+  robots: allowIndexing
+    ? {
+        index: true,
+        follow: true,
+        googleBot: {
+          index: true,
+          follow: true,
+          'max-image-preview': 'large',
+          'max-snippet': -1,
+          'max-video-preview': -1,
+        },
+      }
+    : {
+        index: false,
+        follow: false,
+        googleBot: {
+          index: false,
+          follow: false,
+        },
+      },
 
   category: 'photography',
 }
@@ -98,6 +97,10 @@ export default function RootLayout({
       data-scroll-behavior="smooth"
     >
       <body className={inter.className}>
+        <a href="#innehall" className="skip-link">
+          Hoppa till innehållet
+        </a>
+
         <AdminSessionGuard />
         {children}
       </body>

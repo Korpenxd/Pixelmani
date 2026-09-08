@@ -59,6 +59,11 @@ const nextConfig: NextConfig = {
       },
     ],
     qualities: [75, 85],
+
+    // Supabase serves the stored objects with `Cache-Control: no-cache`, which
+    // would otherwise cap how long Next keeps an optimized image. Every photo
+    // lives under a UUID path and is never overwritten, so a long TTL is safe.
+    minimumCacheTTL: 2678400, // 31 days
   },
 
   async headers() {
@@ -66,6 +71,24 @@ const nextConfig: NextConfig = {
       {
         source: '/(.*)',
         headers: securityHeaders,
+      },
+    ]
+  },
+
+  // Keep one canonical host: www.pixelmani.se permanently redirects to the
+  // apex domain, so the two never get indexed as separate sites.
+  async redirects() {
+    return [
+      {
+        source: '/:path*',
+        has: [
+          {
+            type: 'host',
+            value: 'www.pixelmani.se',
+          },
+        ],
+        destination: 'https://pixelmani.se/:path*',
+        permanent: true,
       },
     ]
   },

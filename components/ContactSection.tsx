@@ -178,8 +178,9 @@ Kontakt </h2>
             maxWidth: '320px',
           }}
         >
-          Har du frågor om en bild, fototeknik eller bara
-          vill säga hej? Skicka gärna ett meddelande.
+          Vill du boka en fotografering i Alingsås med
+          omnejd, eller har du frågor om en bild? Skicka
+          gärna ett meddelande, så kontaktar jag dig.
         </p>
       </div>
 
@@ -222,6 +223,31 @@ Kontakt </h2>
 
           hej@pixelmani.se
         </a>
+
+        <p
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.85rem',
+            color: '#777',
+            fontSize: '0.85rem',
+          }}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            aria-hidden="true"
+          >
+            <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+            <circle cx="12" cy="10" r="3" />
+          </svg>
+
+          Alingsås med omnejd
+        </p>
       </div>
     </div>
 

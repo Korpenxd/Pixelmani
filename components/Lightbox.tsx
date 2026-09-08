@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useRef } from 'react'
+import { photoAlt } from '@/lib/photoAlt'
 import type { Photo } from '@/lib/supabase'
 
 interface Props {
@@ -13,6 +14,7 @@ interface Props {
 
 export default function Lightbox({ photos, currentIndex, onClose, onPrev, onNext }: Props) {
   const photo = photos[currentIndex]
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
 
   const handleKey = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -21,12 +23,22 @@ export default function Lightbox({ photos, currentIndex, onClose, onPrev, onNext
   }, [onClose, onPrev, onNext])
 
   useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null
+
     window.addEventListener('keydown', handleKey)
     document.body.style.overflow = 'hidden'
-    return () => { window.removeEventListener('keydown', handleKey); document.body.style.overflow = '' }
+    closeButtonRef.current?.focus()
+
+    return () => {
+      window.removeEventListener('keydown', handleKey)
+      document.body.style.overflow = ''
+      previouslyFocused?.focus?.()
+    }
   }, [handleKey])
 
   if (!photo) return null
+
+  const alt = photoAlt(photo)
 
   const btnStyle: React.CSSProperties = {
     background: 'none', border: 'none', color: '#fff',
@@ -37,6 +49,9 @@ export default function Lightbox({ photos, currentIndex, onClose, onPrev, onNext
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Bildvisning: ${alt}`}
       onClick={onClose}
       style={{
         position: 'fixed', inset: 0, zIndex: 200,
@@ -48,15 +63,15 @@ export default function Lightbox({ photos, currentIndex, onClose, onPrev, onNext
       {/* Top bar */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, padding: '1.25rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 2 }}>
         <span style={{ fontSize: '0.78rem', color: '#777' }}>{currentIndex + 1} / {photos.length}</span>
-        <button onClick={onClose} aria-label="Stäng" style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.1rem', opacity: 0.7 }}>✕</button>
+        <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="Stäng bildvisning" style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.1rem', opacity: 0.7 }}>✕</button>
       </div>
 
-      <button onClick={(e) => { e.stopPropagation(); onPrev() }} aria-label="Föregående" style={{ ...btnStyle, left: 'clamp(0.25rem, 1.5vw, 1rem)' }}>‹</button>
+      <button type="button" onClick={(e) => { e.stopPropagation(); onPrev() }} aria-label="Föregående bild" style={{ ...btnStyle, left: 'clamp(0.25rem, 1.5vw, 1rem)' }}>‹</button>
 
       <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: '88vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.75rem' }}>
         <img
           src={photo.url}
-          alt={photo.title || photo.name}
+          alt={alt}
           style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain', display: 'block' }}
         />
         {(photo.location || photo.date) && (
@@ -67,7 +82,7 @@ export default function Lightbox({ photos, currentIndex, onClose, onPrev, onNext
         )}
       </div>
 
-      <button onClick={(e) => { e.stopPropagation(); onNext() }} aria-label="Nästa" style={{ ...btnStyle, right: 'clamp(0.25rem, 1.5vw, 1rem)' }}>›</button>
+      <button type="button" onClick={(e) => { e.stopPropagation(); onNext() }} aria-label="Nästa bild" style={{ ...btnStyle, right: 'clamp(0.25rem, 1.5vw, 1rem)' }}>›</button>
     </div>
   )
 }

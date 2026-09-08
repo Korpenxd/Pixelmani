@@ -57,7 +57,7 @@ export default function Hero({
             marginBottom: '1rem',
           }}
         >
-          Fotografi utan nisch.
+          Fotografi för alla
         </h1>
 
         <p
@@ -67,7 +67,8 @@ export default function Hero({
             marginBottom: '2rem',
           }}
         >
-          Bara bilder jag tycker är värda att visa.
+          Bilder att njuta av. Fotograf i Alingsås med
+          omnejd.
         </p>
 
         <Link

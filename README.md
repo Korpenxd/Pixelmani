@@ -1,36 +1,77 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Pixelmani
 
-## Getting Started
+Fotosajt för Per-Arne Hederstaf, byggd med Next.js (App Router) och Supabase.
 
-First, run the development server:
+- **Publika sidor:** `/` (start) och `/showcase` (bildgalleri).
+- **Admin:** `/admin` — inloggning, uppladdning av bilder, kategorier och val av landningsbild. Sidan är `noindex` och blockerad i `robots.txt`.
+- **Data:** bilder och kategorier ligger i Supabase (tabellerna `photos`, `categories`, `site_settings` samt storage-bucketen `photos`).
+
+## Kom igång
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Skapa en `.env.local` med:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+NEXT_PUBLIC_SITE_URL=https://pixelmani.se
+SUPABASE_SERVICE_ROLE_KEY=...
+ADMIN_PASSWORD=...
+ADMIN_SESSION_TOKEN=...
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Produktionsdomän och miljöer
 
-## Learn More
+Domänen används för canonical-länkar, `sitemap.xml`, `robots.txt`, Open Graph-URL:er och JSON-LD. Basadressen väljs miljömedvetet i [`lib/site.ts`](lib/site.ts):
 
-To learn more about Next.js, take a look at the following resources:
+| Miljö | Bas-URL | Indexeras? |
+| --- | --- | --- |
+| Production (`VERCEL_ENV=production`) | `NEXT_PUBLIC_SITE_URL`, annars `https://pixelmani.se` | Ja |
+| Preview (`VERCEL_ENV=preview`) | deployens egen URL (`VERCEL_URL`) | **Nej** – `noindex` + `Disallow: /` |
+| Lokalt / egen server | `NEXT_PUBLIC_SITE_URL` från `.env.local` | Ja |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Preview-deployer pekar alltså aldrig sin canonical mot produktionsdomänen, och de blockeras både i `robots.txt` och via robots-metataggen. Vercel exponerar `VERCEL_ENV` och `VERCEL_URL` automatiskt – ingen konfiguration behövs.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Ska domänen bytas räcker det att ändra på två ställen:
 
-## Deploy on Vercel
+1. `NEXT_PUBLIC_SITE_URL` i `.env.local` och (om den används) i Vercels miljövariabler för **Production**.
+2. `PRODUCTION_SITE_URL` i [`lib/site.ts`](lib/site.ts).
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+`www` omdirigeras permanent till apex-domänen via `redirects()` i [`next.config.ts`](next.config.ts) — värdnamnet står där och behöver uppdateras vid domänbyte.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Adress och verksamhetsområde
+
+Pixelmani beskrivs i strukturerad data som ett *service-area business*: geografin ligger i `areaServed` (Alingsås och Alingsås kommun), inte i en gatuadress. Finns det någon gång en besöksadress fylls `streetAddress` och `postalCode` i [`lib/site.ts`](lib/site.ts) i, varpå en `PostalAddress` läggs till automatiskt. Publicera aldrig en privat hemadress bara för att uppfylla ett krav för rich results.
+
+## SEO-relaterade filer
+
+| Fil | Ansvar |
+| --- | --- |
+| [`lib/site.ts`](lib/site.ts) | Domän, kontaktuppgifter, verksamhetsort och prispaketen — en enda källa för resten. |
+| [`lib/metadata.ts`](lib/metadata.ts) | Bygger `title`, beskrivning, canonical, Open Graph och Twitter-taggar per sida. |
+| [`lib/structuredData.ts`](lib/structuredData.ts) | JSON-LD: `WebSite`, `ProfessionalService`, `Person`, `BreadcrumbList` och `ImageGallery`. |
+| [`lib/photoAlt.ts`](lib/photoAlt.ts) | Alt-texter som byggs av bildens titel och plats. |
+| [`app/sitemap.ts`](app/sitemap.ts) | Sitemap med bild-URL:er för galleriet. |
+| [`app/robots.ts`](app/robots.ts) | Robots-regler; `/admin` och `/api` är blockerade. |
+| `app/opengraph-image.png` | Delningsbild, 1200×630. Genererad från logotypen. |
+
+Titlar och beskrivningar sätts per sida i `app/page.tsx` respektive `app/showcase/page.tsx`.
+
+## Innehåll och uppdatering
+
+Start- och galerisidan förrenderas och uppdateras var femte minut (`export const revalidate = 300`), så nya bilder från adminpanelen dyker upp utan ny deploy. En öppen sida uppdateras dessutom direkt via Supabase realtime.
+
+Fyll i **titel** och **plats** på varje bild i adminpanelen — de används som alt-text, bildtext i lightboxen och i galleriets strukturerade data.
+
+## Kommandon
+
+```bash
+npm run dev      # utvecklingsserver
+npm run build    # produktionsbygge
+npm run lint     # eslint
+npx tsc --noEmit # typkontroll
+```

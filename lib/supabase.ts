@@ -5,6 +5,24 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+/** A row from the photos table, before the public storage URL is resolved. */
+type PhotoRow = Omit<Photo, 'url'>
+
+/**
+ * Resolves the permanent public URL for each photo.
+ *
+ * These URLs end up in the sitemap and in the page's JSON-LD, so they must stay
+ * stable and publicly fetchable. Always use `getPublicUrl` here — a signed URL
+ * (`createSignedUrl`) carries an expiry token and would leave Google with dead
+ * image links once it expires.
+ */
+function withPublicUrls(rows: PhotoRow[]): Photo[] {
+  return rows.map((row) => ({
+    ...row,
+    url: supabase.storage.from('photos').getPublicUrl(row.storage_path).data.publicUrl,
+  }))
+}
+
 export type Photo = {
   id: string
   name: string
@@ -24,10 +42,7 @@ export async function getPhotos(): Promise<Photo[]> {
     .select('*')
     .order('created_at', { ascending: false })
   if (error) { console.error(error); return [] }
-  return data.map((p: any) => ({
-    ...p,
-    url: supabase.storage.from('photos').getPublicUrl(p.storage_path).data.publicUrl,
-  }))
+  return withPublicUrls(data)
 }
 
 export async function getLatestPhotos(limit = 8): Promise<Photo[]> {
@@ -37,10 +52,7 @@ export async function getLatestPhotos(limit = 8): Promise<Photo[]> {
     .order('created_at', { ascending: false })
     .limit(limit)
   if (error) { console.error(error); return [] }
-  return data.map((p: any) => ({
-    ...p,
-    url: supabase.storage.from('photos').getPublicUrl(p.storage_path).data.publicUrl,
-  }))
+  return withPublicUrls(data)
 }
 
 export async function getPhotosByCategory(category: string): Promise<Photo[]> {
@@ -50,10 +62,7 @@ export async function getPhotosByCategory(category: string): Promise<Photo[]> {
     .eq('category', category)
     .order('created_at', { ascending: false })
   if (error) { console.error(error); return [] }
-  return data.map((p: any) => ({
-    ...p,
-    url: supabase.storage.from('photos').getPublicUrl(p.storage_path).data.publicUrl,
-  }))
+  return withPublicUrls(data)
 }
 
 export async function getHeroImagePath(): Promise<string | null> {

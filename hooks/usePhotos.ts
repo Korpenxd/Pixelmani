@@ -1,14 +1,24 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { supabase, Photo, getLatestPhotos, getPhotosByCategory, getPhotos } from '@/lib/supabase'
+import { supabase, Photo, getLatestPhotos, getPhotos } from '@/lib/supabase'
 
-export function useLatestPhotos(limit = 8) {
-  const [photos, setPhotos] = useState<Photo[]>([])
-  const [loading, setLoading] = useState(true)
+/**
+ * Both hooks accept photos that were already fetched on the server, so the
+ * gallery is part of the HTML that crawlers see and the browser does not have
+ * to refetch the same rows on mount. The realtime subscription still keeps an
+ * open page in sync when photos are added from the admin dashboard.
+ */
+
+export function useLatestPhotos(limit = 8, initialPhotos: Photo[] = []) {
+  const [photos, setPhotos] = useState<Photo[]>(initialPhotos)
+  const [loading, setLoading] = useState(initialPhotos.length === 0)
+  const hasServerPhotos = initialPhotos.length > 0
 
   useEffect(() => {
-    getLatestPhotos(limit).then((data) => { setPhotos(data); setLoading(false) })
+    if (!hasServerPhotos) {
+      getLatestPhotos(limit).then((data) => { setPhotos(data); setLoading(false) })
+    }
 
     const channel = supabase
       .channel('photos-latest')
@@ -18,39 +28,30 @@ export function useLatestPhotos(limit = 8) {
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [limit])
+  }, [limit, hasServerPhotos])
 
   return { photos, loading }
 }
 
-export function useAllPhotos() {
-  const [photos, setPhotos] = useState<Photo[]>([])
-  const [loading, setLoading] = useState(true)
+export function useAllPhotos(initialPhotos: Photo[] = []) {
+  const [photos, setPhotos] = useState<Photo[]>(initialPhotos)
+  const [loading, setLoading] = useState(initialPhotos.length === 0)
+  const hasServerPhotos = initialPhotos.length > 0
 
   useEffect(() => {
-    getPhotos().then((data) => { setPhotos(data); setLoading(false) })
-  }, [])
-
-  return { photos, loading }
-}
-
-export function usePhotosByCategory(category: string) {
-  const [photos, setPhotos] = useState<Photo[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    setLoading(true)
-    getPhotosByCategory(category).then((data) => { setPhotos(data); setLoading(false) })
+    if (!hasServerPhotos) {
+      getPhotos().then((data) => { setPhotos(data); setLoading(false) })
+    }
 
     const channel = supabase
-      .channel(`photos-${category}`)
+      .channel('photos-all')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'photos' }, () => {
-        getPhotosByCategory(category).then(setPhotos)
+        getPhotos().then(setPhotos)
       })
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [category])
+  }, [hasServerPhotos])
 
   return { photos, loading }
 }

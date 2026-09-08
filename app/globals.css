@@ -288,3 +288,61 @@ button { cursor: pointer; font-family: inherit; }
     animation: none;
   }
 }
+
+/* Skip link — only visible while focused */
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 300;
+  padding: 0.75rem 1.25rem;
+  background: #111;
+  border: 1px solid var(--border);
+  color: #fff;
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.skip-link:focus-visible {
+  left: 0.75rem;
+  top: 0.75rem;
+  outline: 1px solid #fff;
+  outline-offset: 2px;
+}
+
+/* Inline text links */
+
+.showcase-intro-link,
+.prices-contact-link {
+  color: #aaa;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color 0.2s ease;
+}
+
+.showcase-intro-link:hover,
+.prices-contact-link:hover,
+.showcase-intro-link:focus-visible,
+.prices-contact-link:focus-visible {
+  color: #fff;
+}
+
+/* Honour the visitor's motion preference for the looping hero arrow, the
+   skeleton pulse and the fade-ins. */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

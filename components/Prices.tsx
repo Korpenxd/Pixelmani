@@ -1,21 +1,8 @@
-const packages = [
-  {
-    name: 'Kaffepaketet',
-    price: '49 999 kr',
-    description: '5 bilder.\nKanske.',
-  },
-  {
-    name: 'Eventpaketet',
-    price: '249 999 kr',
-    description: 'Om jag känner\nför det.',
-    featured: true,
-  },
-  {
-    name: 'Bröllop',
-    price: '999 999 kr',
-    description: 'Nej.',
-  },
-]
+import Link from 'next/link'
+
+// Shared with the structured data so the price list and the schema.org offers
+// can never drift apart.
+import { photoPackages as packages } from '@/lib/site'
 
 export default function Prices() {
   return (
@@ -53,7 +40,8 @@ export default function Prices() {
           </h2>
 
           <p style={{ color: '#888', fontSize: '0.9rem' }}>
-            Tekniskt sett finns de.
+            Paketpriser för fotografering i Alingsås med
+            omnejd.
           </p>
         </div>
 
@@ -122,15 +110,20 @@ export default function Prices() {
         <p
           style={{
             textAlign: 'center',
-            fontSize: '0.82rem',
-            color: '#555',
+            fontSize: '0.85rem',
+            color: '#666',
             lineHeight: 1.7,
           }}
         >
-          Dessa priser är avsiktligt absurda.
-          <br />
-          Pixelmani är ett hobbyprojekt och jag tar
-          normalt inte uppdrag.
+          Har du frågor om ett paket, eller behöver du
+          något utanför dem?{' '}
+          <Link
+            href="/showcase#ContactSection"
+            className="prices-contact-link"
+          >
+            Hör av dig via kontaktformuläret
+          </Link>
+          .
         </p>
       </div>
     </section>
