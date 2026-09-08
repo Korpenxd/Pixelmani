@@ -218,27 +218,7 @@ export default function ShowcaseClient({
               Bildgalleri
             </h1>
 
-            <p
-              style={{
-                color: '#888',
-                fontSize: '0.9rem',
-                maxWidth: '48ch',
-                margin: '0 auto',
-                lineHeight: 1.8,
-              }}
-            >
-              Ett urval av mina fotografier – porträtt,
-              natur, stadsmiljöer och experimentella
-              motiv. Fotograferingar sker i Alingsås med
-              omnejd, och{' '}
-              <Link
-                href="/#prices"
-                className="showcase-intro-link"
-              >
-                priser och paket
-              </Link>{' '}
-              hittar du på startsidan.
-            </p>
+
           </div>
 
           <div

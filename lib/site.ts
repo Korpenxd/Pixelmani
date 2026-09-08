@@ -96,7 +96,7 @@ export const photoPackages: PhotoPackage[] = [
   },
   {
     name: 'Familjefoto',
-    price: '3 300 kr',
+    price: '3 300 kr',
     priceSek: 3300,
     description: 'Två timmar hemma hos eller i studio\n8 Bilder',
     featured: true,

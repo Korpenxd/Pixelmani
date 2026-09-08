@@ -1,5 +1,3 @@
-import Link from 'next/link'
-
 // Shared with the structured data so the price list and the schema.org offers
 // can never drift apart.
 import { photoPackages as packages } from '@/lib/site'
@@ -39,10 +37,6 @@ export default function Prices() {
             Priser
           </h2>
 
-          <p style={{ color: '#888', fontSize: '0.9rem' }}>
-            Paketpriser för fotografering i Alingsås med
-            omnejd.
-          </p>
         </div>
 
         <div
@@ -106,25 +100,6 @@ export default function Prices() {
             </div>
           ))}
         </div>
-
-        <p
-          style={{
-            textAlign: 'center',
-            fontSize: '0.85rem',
-            color: '#666',
-            lineHeight: 1.7,
-          }}
-        >
-          Har du frågor om ett paket, eller behöver du
-          något utanför dem?{' '}
-          <Link
-            href="/showcase#ContactSection"
-            className="prices-contact-link"
-          >
-            Hör av dig via kontaktformuläret
-          </Link>
-          .
-        </p>
       </div>
     </section>
   )
