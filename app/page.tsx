@@ -6,6 +6,7 @@ import LatestPhotos from '@/components/LatestPhotos'
 import Prices from '@/components/Prices'
 import StructuredData from '@/components/StructuredData'
 import Footer from '@/components/Footer'
+import CookieNotice from '@/components/CookieNotice'
 
 import { getHeroImageUrl } from '@/lib/supabase'
 
@@ -52,6 +53,8 @@ export default async function HomePage() {
         <Prices />
       </main>
       <Footer />
+
+      <CookieNotice />
     </>
   )
 }

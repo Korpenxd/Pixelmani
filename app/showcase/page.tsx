@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import ShowcaseClient from './ShowcaseClient'
+import CookieNotice from '@/components/CookieNotice'
 
 export const metadata: Metadata = {
   title: 'Showcase – Natur, stad och experimentell fotografi',
@@ -26,5 +27,10 @@ export const metadata: Metadata = {
 }
 
 export default function ShowcasePage() {
-  return <ShowcaseClient />
+  return (
+    <>
+      <ShowcaseClient />
+      <CookieNotice />
+    </>
+  )
 }
