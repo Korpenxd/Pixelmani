@@ -1,35 +1,42 @@
 import type { Metadata } from 'next'
+
 import ShowcaseClient from './ShowcaseClient'
 import CookieNotice from '@/components/CookieNotice'
+import JsonLd from '@/components/JsonLd'
 
-export const metadata: Metadata = {
-  title: 'Showcase – Natur, stad och experimentell fotografi',
+import { pageMetadata } from '@/lib/metadata'
+import { siteConfig } from '@/lib/site'
+import { jsonLdGraph, showcaseGraph, siteGraph } from '@/lib/structuredData'
+import { getCategories, getPhotos } from '@/lib/supabase'
 
-  description:
-    'Se fotografier av Per-Arne Hederstaf inom natur, stadsmiljöer och experimentella motiv i Pixelmanis bildgalleri.',
+// Keeps the gallery crawlable and in sync with the admin dashboard.
+export const revalidate = 300
 
-  alternates: {
-    canonical: '/showcase',
-  },
+export const metadata: Metadata = pageMetadata({
+  title: 'Bildgalleri – porträtt, natur och stadsmiljöer',
+  description: `Ett urval fotografier av ${siteConfig.photographer}: porträtt, natur, stadsmiljöer och experimentella motiv. Fotograferingar sker i ${siteConfig.serviceArea}.`,
+  path: '/showcase',
+  ogTitle: `Bildgalleri – ${siteConfig.name}`,
+  ogDescription: `Fotografier av ${siteConfig.photographer} – porträtt, natur, stadsmiljöer och experimentella motiv.`,
+})
 
-  openGraph: {
-    title: 'Showcase – Pixelmani',
-    description:
-      'Utforska Per-Arne Hederstafs fotografier av natur, stadsmiljöer och experimentella motiv.',
-    url: '/showcase',
-    type: 'website',
-  },
+export default async function ShowcasePage() {
+  const [photos, categories] = await Promise.all([
+    getPhotos(),
+    getCategories(),
+  ])
 
-  robots: {
-    index: true,
-    follow: true,
-  },
-}
-
-export default function ShowcasePage() {
   return (
     <>
-      <ShowcaseClient />
+      <JsonLd
+        data={jsonLdGraph([...siteGraph(), ...showcaseGraph(photos)])}
+      />
+
+      <ShowcaseClient
+        initialPhotos={photos}
+        initialCategories={categories}
+      />
+
       <CookieNotice />
     </>
   )

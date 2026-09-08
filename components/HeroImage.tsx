@@ -2,18 +2,23 @@
 
 import Image from 'next/image'
 import { useState } from 'react'
+import { siteConfig } from '@/lib/site'
 
 type HeroImageProps = {
   src: string
+  alt?: string
 }
 
-export default function HeroImage({ src }: HeroImageProps) {
+export default function HeroImage({
+  src,
+  alt = `Fotografi av ${siteConfig.photographer}`,
+}: HeroImageProps) {
   const [loaded, setLoaded] = useState(false)
 
   return (
     <Image
       src={src}
-      alt=""
+      alt={alt}
       fill
       preload
       sizes="100vw"

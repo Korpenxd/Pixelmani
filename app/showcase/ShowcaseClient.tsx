@@ -1,8 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  getCategories,
   type Category,
   type Photo,
 } from '@/lib/supabase'
@@ -11,23 +10,19 @@ import Footer from '@/components/Footer'
 import Lightbox from '@/components/Lightbox'
 import ContactSection from '@/components/ContactSection'
 import Image from 'next/image'
-import {
-  useAllPhotos,
-  usePhotosByCategory,
-} from '@/hooks/usePhotos'
+import Link from 'next/link'
+import { photoAlt } from '@/lib/photoAlt'
+import { useAllPhotos } from '@/hooks/usePhotos'
 
-function PhotoGrid({ category }: { category: string }) {
+function PhotoGrid({
+  photos,
+  loading,
+}: {
+  photos: Photo[]
+  loading: boolean
+}) {
   const [lightboxIndex, setLightboxIndex] =
     useState<number | null>(null)
-
-  const allHook = useAllPhotos()
-
-  const catHook = usePhotosByCategory(
-    category === 'all' ? '__none__' : category
-  )
-
-  const { photos, loading } =
-    category === 'all' ? allHook : catHook
 
   useEffect(() => {
     if (loading) return
@@ -91,6 +86,7 @@ function PhotoGrid({ category }: { category: string }) {
                 key={photo.id}
                 type="button"
                 onClick={() => setLightboxIndex(i)}
+                aria-label={`Visa ${photoAlt(photo)} i helskärm`}
                 style={{
                   position: 'relative',
                   aspectRatio: '1',
@@ -103,7 +99,7 @@ function PhotoGrid({ category }: { category: string }) {
               >
                 <Image
                   src={photo.url}
-                  alt={photo.title || 'Fotografi av Per-Arne Hederstaf'}
+                  alt={photoAlt(photo)}
                   fill
                   quality={75}
                   sizes="
@@ -112,7 +108,7 @@ function PhotoGrid({ category }: { category: string }) {
                     (max-width: 1200px) 33vw,
                     20vw
                   "
-                  preload={i === 0}
+                  loading={i < 5 ? 'eager' : 'lazy'}
                   style={{
                     objectFit: 'cover',
                     transition: 'transform 0.4s ease',
@@ -153,43 +149,44 @@ function PhotoGrid({ category }: { category: string }) {
 
 
 
-export default function ShowcaseClient() {
+export default function ShowcaseClient({
+  initialPhotos = [],
+  initialCategories = [],
+}: {
+  initialPhotos?: Photo[]
+  initialCategories?: Category[]
+}) {
   const [activeCategory, setActiveCategory] =
     useState('all')
 
-
-  const [categories, setCategories] =
-    useState<Category[]>([])
-
-  const [categoriesLoading, setCategoriesLoading] =
-    useState(true)
-
-  useEffect(() => {
-    async function loadCategories() {
-      setCategoriesLoading(true)
-
-      const data = await getCategories()
-      setCategories(data)
-
-      setCategoriesLoading(false)
-    }
-
-    loadCategories()
-  }, [])
+  const { photos, loading } = useAllPhotos(initialPhotos)
 
   const displayCategories = [
     {
       key: 'all',
       label: 'Alla',
     },
-    ...categories,
+    ...initialCategories,
   ]
+
+  // Every photo is already loaded, so switching category is instant and all
+  // categories stay present in the server-rendered HTML.
+  const visiblePhotos = useMemo(
+    () =>
+      activeCategory === 'all'
+        ? photos
+        : photos.filter(
+            (photo) => photo.category === activeCategory
+          ),
+    [photos, activeCategory]
+  )
 
   return (
     <>
       <Navbar />
 
       <main
+        id="innehall"
         style={{
           minHeight: '100vh',
           background: '#000000',
@@ -218,20 +215,35 @@ export default function ShowcaseClient() {
                 marginBottom: '0.5rem',
               }}
             >
-              Showcase
+              Bildgalleri
             </h1>
 
             <p
               style={{
                 color: '#888',
                 fontSize: '0.9rem',
+                maxWidth: '48ch',
+                margin: '0 auto',
+                lineHeight: 1.8,
               }}
             >
-              En samling fotografier.
+              Ett urval av mina fotografier – porträtt,
+              natur, stadsmiljöer och experimentella
+              motiv. Fotograferingar sker i Alingsås med
+              omnejd, och{' '}
+              <Link
+                href="/#prices"
+                className="showcase-intro-link"
+              >
+                priser och paket
+              </Link>{' '}
+              hittar du på startsidan.
             </p>
           </div>
 
           <div
+            role="group"
+            aria-label="Filtrera bilder efter kategori"
             style={{
               display: 'flex',
               justifyContent: 'center',
@@ -242,74 +254,52 @@ export default function ShowcaseClient() {
               borderBottom: '1px solid #2a2a2a',
             }}
           >
-            {categoriesLoading ? (
-              <span
+            {displayCategories.map((cat) => (
+              <button
+                key={cat.key}
+                type="button"
+                aria-pressed={activeCategory === cat.key}
+                onClick={() =>
+                  setActiveCategory(cat.key)
+                }
                 style={{
-                  color: '#555',
-                  fontSize: '0.78rem',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color:
+                    activeCategory === cat.key
+                      ? '#fff'
+                      : '#555',
+                  fontSize:
+                    'clamp(0.62rem, 1.4vw, 0.78rem)',
                   letterSpacing: '0.12em',
                   textTransform: 'uppercase',
-                  paddingBottom: '0.75rem',
+                  padding: '0 0.15rem 0.75rem',
+                  borderBottom:
+                    activeCategory === cat.key
+                      ? '2px solid #fff'
+                      : '2px solid transparent',
+                  marginBottom: '-1px',
+                  transition:
+                    'color 0.2s, border-color 0.2s',
+                  whiteSpace: 'nowrap',
                 }}
               >
-                Laddar kategorier...
-              </span>
-            ) : (
-              displayCategories.map((cat) => (
-                <button
-                  key={cat.key}
-                  type="button"
-                  onClick={() =>
-                    setActiveCategory(cat.key)
-                  }
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    color:
-                      activeCategory === cat.key
-                        ? '#fff'
-                        : '#555',
-                    fontSize:
-                      'clamp(0.62rem, 1.4vw, 0.78rem)',
-                    letterSpacing: '0.12em',
-                    textTransform: 'uppercase',
-                    padding: '0 0.15rem 0.75rem',
-                    borderBottom:
-                      activeCategory === cat.key
-                        ? '2px solid #fff'
-                        : '2px solid transparent',
-                    marginBottom: '-1px',
-                    transition:
-                      'color 0.2s, border-color 0.2s',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {cat.label}
-                </button>
-              ))
-            )}
+                {cat.label}
+              </button>
+            ))}
           </div>
 
-          <PhotoGrid category={activeCategory} />
+          <PhotoGrid
+            photos={visiblePhotos}
+            loading={loading}
+          />
         </div>
 
         <ContactSection />
       </main>
 
       <Footer />
-
-      <style>{`
-        @keyframes pulse {
-          0%, 100% {
-            opacity: 1;
-          }
-
-          50% {
-            opacity: 0.5;
-          }
-        }
-      `}</style>
     </>
   )
 }
