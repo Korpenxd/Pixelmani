@@ -1,9 +1,20 @@
 import type { MetadataRoute } from 'next'
 
+import { allowIndexing, siteUrl } from '@/lib/site'
+
 export default function robots(): MetadataRoute.Robots {
-  const siteUrl =
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    'https://pixelmani-5sm4.vercel.app'
+  // Preview deployments must not be crawled at all — they would otherwise
+  // duplicate the production site under a different host.
+  if (!allowIndexing) {
+    return {
+      rules: [
+        {
+          userAgent: '*',
+          disallow: '/',
+        },
+      ],
+    }
+  }
 
   return {
     rules: [
