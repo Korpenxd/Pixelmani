@@ -1,25 +1,8 @@
-const packages = [
-  {
-    name: 'Modelfoto / Fashion',
-    price: '6 350 kr',
-    description: 'Fyra timmar i studio\n6 bilder',
-  },
-  {
-    name: 'Familjefoto',
-    price: '3 300 kr',
-    description: 'Två timmar hemma hos eller i studio\n8 Bilder',
-    featured: true,
-  },
-  {
-    name: 'Boudoir',
-    price: '7 200 kr',
-    description: 'Fem timmar ”on location”\n10 Bilder',
-  },
-  {
-    name: 'Uppdragsfoto',
-    price: 'Enligt offert',
-  },
-]
+import Link from 'next/link'
+
+// Shared with the structured data so the price list and the schema.org offers
+// can never drift apart.
+import { photoPackages as packages } from '@/lib/site'
 
 export default function Prices() {
   return (
@@ -57,7 +40,8 @@ export default function Prices() {
           </h2>
 
           <p style={{ color: '#888', fontSize: '0.9rem' }}>
-            Tekniskt sett finns de.
+            Paketpriser för fotografering i Alingsås med
+            omnejd.
           </p>
         </div>
 
@@ -122,7 +106,25 @@ export default function Prices() {
             </div>
           ))}
         </div>
-          
+
+        <p
+          style={{
+            textAlign: 'center',
+            fontSize: '0.85rem',
+            color: '#666',
+            lineHeight: 1.7,
+          }}
+        >
+          Har du frågor om ett paket, eller behöver du
+          något utanför dem?{' '}
+          <Link
+            href="/showcase#ContactSection"
+            className="prices-contact-link"
+          >
+            Hör av dig via kontaktformuläret
+          </Link>
+          .
+        </p>
       </div>
     </section>
   )

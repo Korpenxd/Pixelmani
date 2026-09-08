@@ -67,7 +67,8 @@ export default function Hero({
             marginBottom: '2rem',
           }}
         >
-          Bilder att njuta av
+          Bilder att njuta av. Fotograf i Alingsås med
+          omnejd.
         </p>
 
         <Link

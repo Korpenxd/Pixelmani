@@ -10,18 +10,32 @@ export default function Navbar() {
   const pathname = usePathname()
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 20)
-    window.addEventListener('scroll', onScroll)
-    return () => window.removeEventListener('scroll', onScroll)
+    let frame = 0
+
+    const onScroll = () => {
+      if (frame) return
+
+      frame = window.requestAnimationFrame(() => {
+        setScrolled(window.scrollY > 20)
+        frame = 0
+      })
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true })
+
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      if (frame) window.cancelAnimationFrame(frame)
+    }
   }, [])
 
-  
+
 
   const hasBg = scrolled || menuOpen || pathname !== '/'
 
   return (
     <>
-      <nav style={{
+      <nav aria-label="Sidhuvud" style={{
         position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100,
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '1.25rem clamp(1.25rem, 4vw, 2.5rem)',
@@ -30,16 +44,19 @@ export default function Navbar() {
         transition: 'background 0.3s, backdrop-filter 0.3s',
         borderBottom: hasBg ? '1px solid #1e1e1e' : 'none',
       }}>
-        <Link href="/" style={{ fontWeight: 700, fontSize: '0.82rem', letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+        <Link href="/" aria-label="Pixelmani – till startsidan" style={{ fontWeight: 700, fontSize: '0.82rem', letterSpacing: '0.18em', textTransform: 'uppercase' }}>
           Pixelmani
         </Link>
         <button
+          type="button"
           onClick={() => setMenuOpen(!menuOpen)}
-          aria-label="Meny"
+          aria-label={menuOpen ? 'Stäng meny' : 'Öppna meny'}
+          aria-expanded={menuOpen}
+          aria-controls="huvudmeny"
           style={{ background: 'none', border: 'none', color: '#fff', padding: '4px', display: 'flex', flexDirection: 'column', gap: '5px' }}
         >
           {[0, 1, 2].map((i) => (
-            <span key={i} style={{
+            <span key={i} aria-hidden="true" style={{
               display: 'block', width: '22px', height: '1.5px', background: '#fff',
               transition: 'transform 0.25s, opacity 0.25s',
               transform: menuOpen
@@ -53,18 +70,24 @@ export default function Navbar() {
         </button>
       </nav>
 
-      {/* Fullscreen overlay menu */}
-      <div style={{
-        position: 'fixed', inset: 0, zIndex: 99,
-        background: 'rgba(17,17,17,0.98)',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2.5rem',
-        opacity: menuOpen ? 1 : 0,
-        pointerEvents: menuOpen ? 'all' : 'none',
-        transition: 'opacity 0.25s',
-      }}>
+      {/* Fullscreen overlay menu — inert while closed so its links stay out of
+          the keyboard tab order and out of the accessibility tree. */}
+      <nav
+        id="huvudmeny"
+        aria-label="Huvudmeny"
+        inert={!menuOpen}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 99,
+          background: 'rgba(17,17,17,0.98)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2.5rem',
+          opacity: menuOpen ? 1 : 0,
+          pointerEvents: menuOpen ? 'all' : 'none',
+          transition: 'opacity 0.25s',
+        }}
+      >
         {[
           { href: '/#hero', label: 'Hem' },
-          { href: '/showcase', label: 'Showcase' },
+          { href: '/showcase', label: 'Galleri' },
           { href: '/#prices', label: 'Priser' },
           { href: '/showcase#ContactSection', label: 'Kontakt' },
         ].map((link) => (
@@ -77,7 +100,7 @@ export default function Navbar() {
             {link.label}
           </Link>
         ))}
-      </div>
+      </nav>
     </>
   )
 }
