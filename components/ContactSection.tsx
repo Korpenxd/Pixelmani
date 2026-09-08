@@ -179,7 +179,7 @@ Kontakt </h2>
           }}
         >
           Har du frågor om en bild, fototeknik eller bara
-          vill säga hej? Skicka gärna ett meddelande.
+          vill säga hej? Skicka gärna ett meddelande, så kontaktar jag dig.
         </p>
       </div>
 

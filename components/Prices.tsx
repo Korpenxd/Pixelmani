@@ -1,19 +1,23 @@
 const packages = [
   {
-    name: 'Kaffepaketet',
-    price: '49 999 kr',
-    description: '5 bilder.\nKanske.',
+    name: 'Modelfoto / Fashion',
+    price: '6 350 kr',
+    description: 'Fyra timmar i studio\n6 bilder',
   },
   {
-    name: 'Eventpaketet',
-    price: '249 999 kr',
-    description: 'Om jag känner\nför det.',
+    name: 'Familjefoto',
+    price: '3 300 kr',
+    description: 'Två timmar hemma hos eller i studio\n8 Bilder',
     featured: true,
   },
   {
-    name: 'Bröllop',
-    price: '999 999 kr',
-    description: 'Nej.',
+    name: 'Boudoir',
+    price: '7 200 kr',
+    description: 'Fem timmar ”on location”\n10 Bilder',
+  },
+  {
+    name: 'Uppdragsfoto',
+    price: 'Enligt offert',
   },
 ]
 
@@ -118,20 +122,7 @@ export default function Prices() {
             </div>
           ))}
         </div>
-
-        <p
-          style={{
-            textAlign: 'center',
-            fontSize: '0.82rem',
-            color: '#555',
-            lineHeight: 1.7,
-          }}
-        >
-          Dessa priser är avsiktligt absurda.
-          <br />
-          Pixelmani är ett hobbyprojekt och jag tar
-          normalt inte uppdrag.
-        </p>
+          
       </div>
     </section>
   )
