@@ -182,9 +182,9 @@ button { cursor: pointer; font-family: inherit; }
   color: #fff;
 }
 
-/* Cookie notice */
+/* Site information panel */
 
-.cookie-notice-wrap {
+.site-info-wrap {
   position: fixed;
   right: clamp(1rem, 4vw, 2.5rem);
   bottom: clamp(1rem, 3vw, 2rem);
@@ -193,7 +193,7 @@ button { cursor: pointer; font-family: inherit; }
   pointer-events: none;
 }
 
-.cookie-notice {
+.site-info-panel {
   pointer-events: auto;
   display: flex;
   align-items: flex-start;
@@ -207,11 +207,11 @@ button { cursor: pointer; font-family: inherit; }
   animation: cookieNoticeIn 0.45s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
 
-.cookie-notice-leaving {
+.site-info-panel-leaving {
   animation: cookieNoticeOut 0.26s ease both;
 }
 
-.cookie-notice-title {
+.site-info-title {
   font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -220,13 +220,13 @@ button { cursor: pointer; font-family: inherit; }
   margin-bottom: 0.4rem;
 }
 
-.cookie-notice-text {
+.site-info-text {
   font-size: 0.78rem;
   line-height: 1.5;
   color: var(--text-muted);
 }
 
-.cookie-notice-close {
+.site-info-button {
   flex: none;
   display: flex;
   align-items: center;
@@ -242,11 +242,11 @@ button { cursor: pointer; font-family: inherit; }
   transition: color 0.2s ease;
 }
 
-.cookie-notice-close:hover {
+.site-info-button:hover {
   color: #fff;
 }
 
-.cookie-notice-close:focus-visible {
+.site-info-button:focus-visible {
   color: #fff;
   outline: 1px solid #fff;
   outline-offset: 2px;
@@ -263,19 +263,19 @@ button { cursor: pointer; font-family: inherit; }
 }
 
 @media (max-width: 520px) {
-  .cookie-notice-wrap {
+  .site-info-wrap {
     left: 0.75rem;
     right: 0.75rem;
     bottom: 0.75rem;
     max-width: none;
   }
 
-  .cookie-notice {
+  .site-info-panel {
     /* Nästan opak så att hero-pilen inte skiner igenom på små skärmar */
     background: rgba(17, 17, 17, 0.99);
   }
 
-  .cookie-notice-close {
+  .site-info-button {
     width: 44px;
     height: 44px;
     margin: -0.6rem -0.6rem 0 0;
@@ -283,8 +283,8 @@ button { cursor: pointer; font-family: inherit; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cookie-notice,
-  .cookie-notice-leaving {
+  .site-info-panel,
+  .site-info-panel-leaving {
     animation: none;
   }
 }

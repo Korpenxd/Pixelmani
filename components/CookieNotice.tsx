@@ -64,23 +64,23 @@ export default function CookieNotice() {
 
   return (
     <div
-      className="cookie-notice-wrap"
+      className="site-info-wrap"
       role="status"
       aria-live="polite"
-      aria-label="Information om cookies"
+      aria-label="Information om webbplatsen"
     >
       <div
         className={
           leaving
-            ? 'cookie-notice cookie-notice-leaving'
-            : 'cookie-notice'
+            ? 'site-info-panel site-info-panel-leaving'
+            : 'site-info-panel'
         }
       >
         <div>
-          <p className="cookie-notice-title">
+          <p className="site-info-title">
             Inga cookies. Ingen spårning.
           </p>
-          <p className="cookie-notice-text">
+          <p className="site-info-text">
             Pixelmani använder inga cookies för spårning,
             annonsering eller analys.
           </p>
@@ -89,7 +89,7 @@ export default function CookieNotice() {
         <button
           type="button"
           onClick={dismiss}
-          className="cookie-notice-close"
+          className="site-info-button"
           aria-label="Stäng meddelandet"
         >
           ✕
