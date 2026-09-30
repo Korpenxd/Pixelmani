@@ -1,7 +1,7 @@
 import type { MetadataRoute } from 'next'
 
 import { siteUrl } from '@/lib/site'
-import { getHeroImageUrl, getPhotos } from '@/lib/supabase'
+import { getHeroImageUrl, getPhotos } from '@/lib/data'
 
 // Only public, indexable routes belong here — /admin and /api are excluded
 // both from this file and from robots.txt.

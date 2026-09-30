@@ -1,5 +1,5 @@
 import { siteConfig } from '@/lib/site'
-import type { Photo } from '@/lib/supabase'
+import type { Photo } from '@/lib/types'
 
 /**
  * Builds natural Swedish alt text from the metadata the photographer already

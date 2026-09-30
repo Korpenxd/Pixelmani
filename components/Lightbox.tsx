@@ -2,7 +2,7 @@
 
 import { useEffect, useCallback, useRef } from 'react'
 import { photoAlt } from '@/lib/photoAlt'
-import type { Photo } from '@/lib/supabase'
+import type { Photo } from '@/lib/types'
 
 interface Props {
   photos: Photo[]

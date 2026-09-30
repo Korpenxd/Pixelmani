@@ -11,7 +11,7 @@ import CookieNotice from '@/components/CookieNotice'
 import { pageMetadata } from '@/lib/metadata'
 import { siteConfig } from '@/lib/site'
 import { jsonLdGraph, siteGraph } from '@/lib/structuredData'
-import { getHeroImageUrl, getLatestPhotos } from '@/lib/supabase'
+import { getHeroImageUrl, getLatestPhotos } from '@/lib/data'
 
 // Photos are added through the admin dashboard, so the prerendered page is
 // refreshed periodically instead of being frozen at build time.

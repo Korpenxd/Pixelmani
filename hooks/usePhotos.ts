@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { supabase, Photo, getLatestPhotos, getPhotos } from '@/lib/supabase'
+import { getLatestPhotos, getPhotos, subscribeToPhotoChanges } from '@/lib/data'
+import type { Photo } from '@/lib/types'
 
 /**
  * Both hooks accept photos that were already fetched on the server, so the
@@ -20,14 +21,9 @@ export function useLatestPhotos(limit = 8, initialPhotos: Photo[] = []) {
       getLatestPhotos(limit).then((data) => { setPhotos(data); setLoading(false) })
     }
 
-    const channel = supabase
-      .channel('photos-latest')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'photos' }, () => {
-        getLatestPhotos(limit).then(setPhotos)
-      })
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
+    return subscribeToPhotoChanges('photos-latest', () => {
+      getLatestPhotos(limit).then(setPhotos)
+    })
   }, [limit, hasServerPhotos])
 
   return { photos, loading }
@@ -43,14 +39,9 @@ export function useAllPhotos(initialPhotos: Photo[] = []) {
       getPhotos().then((data) => { setPhotos(data); setLoading(false) })
     }
 
-    const channel = supabase
-      .channel('photos-all')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'photos' }, () => {
-        getPhotos().then(setPhotos)
-      })
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
+    return subscribeToPhotoChanges('photos-all', () => {
+      getPhotos().then(setPhotos)
+    })
   }, [hasServerPhotos])
 
   return { photos, loading }

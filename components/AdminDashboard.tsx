@@ -2,13 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
-  type Photo,
   getPhotos,
   getStorageUsage,
   getCategories,
   getHeroImageUrl,
-  type Category,
-} from '@/lib/supabase'
+} from '@/lib/data'
+import type { Category, Photo, StorageUsage } from '@/lib/types'
 import { useRouter } from 'next/navigation'
 import Navbar from '@/components/Navbar'
 import { compressImage } from '@/lib/compressImage'
@@ -32,11 +31,7 @@ export default function AdminDashboard() {
   const [title, setTitle] = useState('')
   const [location, setLocation] = useState('')
   const [date, setDate] = useState('')
-  const [storageUsage, setStorageUsage] = useState<{
-  total_bytes: number
-  total_mb: number
-  file_count: number
-} | null>(null)
+  const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null)
 
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [savingHero, setSavingHero] = useState(false)

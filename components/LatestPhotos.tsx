@@ -5,7 +5,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { useLatestPhotos } from '@/hooks/usePhotos'
 import { photoAlt } from '@/lib/photoAlt'
-import type { Photo } from '@/lib/supabase'
+import type { Photo } from '@/lib/types'
 import Lightbox from './Lightbox'
 
 export default function LatestPhotos({ initialPhotos = [] }: { initialPhotos?: Photo[] }) {

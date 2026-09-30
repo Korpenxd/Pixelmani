@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   type Category,
   type Photo,
-} from '@/lib/supabase'
+} from '@/lib/types'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
 import Lightbox from '@/components/Lightbox'

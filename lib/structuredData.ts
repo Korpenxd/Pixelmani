@@ -1,6 +1,6 @@
 import { absoluteUrl, photoPackages, siteConfig, siteUrl } from '@/lib/site'
 import { photoAlt } from '@/lib/photoAlt'
-import type { Photo } from '@/lib/supabase'
+import type { Photo } from '@/lib/types'
 
 /**
  * schema.org graph for the site. Every property below is backed by information

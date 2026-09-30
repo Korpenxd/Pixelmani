@@ -7,7 +7,7 @@ import JsonLd from '@/components/JsonLd'
 import { pageMetadata } from '@/lib/metadata'
 import { siteConfig } from '@/lib/site'
 import { jsonLdGraph, showcaseGraph, siteGraph } from '@/lib/structuredData'
-import { getCategories, getPhotos } from '@/lib/supabase'
+import { getCategories, getPhotos } from '@/lib/data'
 
 // Keeps the gallery crawlable and in sync with the admin dashboard.
 export const revalidate = 300
