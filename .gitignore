@@ -34,6 +34,10 @@ yarn-error.log*
 .env
 .env.local
 .env.development.local
+.env*.local
+
+# Loopia migration: local Supabase export bundle (contains production data)
+/migration-export/
 
 # vercel
 .vercel
