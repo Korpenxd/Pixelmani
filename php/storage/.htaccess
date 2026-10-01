@@ -1,0 +1,2 @@
+# Defence in depth: this directory must never be served over HTTP.
+Require all denied
