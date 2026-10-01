@@ -7,7 +7,7 @@ import type { PublicDataSource } from '@/lib/data/types'
  * The Supabase implementation (lib/data/supabase.ts) satisfies the same
  * contract and could be switched back in here, but it is deliberately not
  * imported, so the public bundle carries no Supabase client.
- * The admin dashboard reads through lib/data/admin.ts instead.
+ * The admin dashboard uses the PHP admin client (lib/adminApi.ts) instead.
  */
 const publicData: PublicDataSource = phpDataSource
 

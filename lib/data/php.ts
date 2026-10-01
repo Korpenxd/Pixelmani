@@ -85,7 +85,7 @@ async function request(path: string): Promise<unknown> {
 
 // ── Response validation ─────────────────────────────────────────────────────
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
@@ -103,7 +103,7 @@ const isNumberOrNull = (v: unknown): v is number | null => v === null || (typeof
 const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean'
 
 /** Absolute same-site URL → root-relative path, keeping its encoding. */
-function toSitePath(url: string): string {
+export function toSitePath(url: string): string {
   if (url.startsWith('/') && !url.startsWith('//')) return url
   try {
     const parsed = new URL(url)
@@ -113,7 +113,7 @@ function toSitePath(url: string): string {
   }
 }
 
-function parsePhoto(value: unknown): Photo {
+export function parsePhoto(value: unknown): Photo {
   if (!isRecord(value)) throw new PublicApiError('Malformed API response: photo must be an object.')
 
   const thumbUrl = field(value, 'thumb_url', isStringOrNull, 'a string or null')
@@ -138,7 +138,7 @@ function parsePhoto(value: unknown): Photo {
   }
 }
 
-function parseCategory(value: unknown): Category {
+export function parseCategory(value: unknown): Category {
   if (!isRecord(value)) throw new PublicApiError('Malformed API response: category must be an object.')
 
   return {

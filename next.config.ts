@@ -62,6 +62,12 @@ const phpApiBase = process.env.PIXELMANI_BUILD_API_BASE?.trim().replace(/\/+$/, 
 const publicApiEndpoints = ['health', 'photos', 'categories', 'hero', 'hero-image']
 
 const nextConfig: NextConfig = {
+  // Development only: the local Apache vhost (php/dev/apache-vhost.local.conf)
+  // serves the site at http://pixelmani.test and proxies pages to next dev, so
+  // the dev server must accept that origin for its own resources (hot reload).
+  // Ignored by next build / next start.
+  allowedDevOrigins: ['pixelmani.test'],
+
   images: {
     // Photos are now served as plain files from /media (PHP/Apache). Next 16
     // refuses to optimise images from local/private IPs, and the static export

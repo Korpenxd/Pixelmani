@@ -1,10 +1,7 @@
-import AdminLogin from '@/components/AdminLogin'
-import AdminDashboard from '@/components/AdminDashboard'
-import { isAdminRequest } from '@/lib/adminAuth'
+import AdminApp from '@/components/AdminApp'
 
-export default async function AdminPage() {
-  const isAdmin = await isAdminRequest()
-
-  return isAdmin ? <AdminDashboard /> : <AdminLogin />
+// Rendered in the browser: AdminApp asks GET /api/admin/session and shows the
+// login or the dashboard. Nothing here reads cookies, so the page is static.
+export default function AdminPage() {
+  return <AdminApp />
 }
-

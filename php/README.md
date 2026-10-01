@@ -9,8 +9,9 @@ responses, method checks, error handling, logging, health check) and the
 public read-only API, admin authentication (login, session, logout), the
 authenticated photo upload and the rest of the admin backend: photo edits and
 deletion, categories, the hero image and storage usage. There is no contact
-endpoint yet. The live admin still uses the Next.js login and Supabase; these
-endpoints exist alongside it until the admin frontend is switched over.
+endpoint yet. The admin frontend (`/admin`) uses these endpoints only; the old
+Next.js admin routes and Supabase code are still in the repository, unused,
+until they are removed.
 
 ## Layout
 
@@ -432,7 +433,7 @@ deployment.**
 ## Admin backend (edits, deletion, categories, hero, storage)
 
 These endpoints replace the remaining Next.js/Supabase admin routes. The admin
-frontend is **not** switched to them yet.
+frontend uses them through `lib/adminApi.ts` (see "Admin frontend" below).
 
 | Endpoint | Replaces (Next.js) | Auth |
 | --- | --- | --- |
@@ -692,6 +693,27 @@ administrative task done with a different account.
    runs as administrator), then Laragon → Apache → Reload.
 4. Open <http://pixelmani.test/api/health>. `http://pixelmani.test/api/health.php`
    also works.
+5. For the pages and the admin, start Next in the repository root:
+   `npm run dev` (`next dev` on port 3000; `.env.local` supplies
+   `PIXELMANI_BUILD_API_BASE`). Then open <http://pixelmani.test/admin>.
+
+The vhost gives the whole site one origin, as in production:
+
+| Path | Served by |
+| --- | --- |
+| `/api/*` | PHP (`php/public/api`) |
+| `/media/*` | files in `php/public/media` |
+| everything else | reverse proxy to `next dev` on `127.0.0.1:3000`, including its hot-reload websocket |
+
+The PHP session cookie, the Origin check and CSRF therefore work unchanged; no
+CORS and no extra allowed origins on the PHP side. The proxy modules are
+loaded by the vhost file itself, and `next.config.ts` sets
+`allowedDevOrigins: ['pixelmani.test']`, which only affects `next dev`.
+Use `next dev` rather than `next start` here: outside development the CSP
+adds `upgrade-insecure-requests`, which breaks plain-http
+`http://pixelmani.test`. Without Next running, pages give 503 while `/api`
+and `/media` keep working. The old Next `/api/admin/*` routes are not
+reachable through this vhost. Production never uses this proxy.
 
 `/api/health?diagnostics=1` adds PHP and database version details. It is only
 available when `APP_ENV=local` **and** the request comes from `127.0.0.1` or `::1`.
@@ -711,11 +733,43 @@ On Windows, Apache matches the case of existing directories case-insensitively
 (`/api/admin/Photos/update` still works locally). Linux hosting is
 case-sensitive.
 
+## Admin frontend
+
+`/admin` renders entirely in the browser, so it is statically renderable:
+
+- **Shell:** `components/AdminApp.tsx` calls `GET /api/admin/session` and shows
+  `AdminLogin` or `AdminDashboard`. It reads no cookies and has no server code.
+- **API client:** `lib/adminApi.ts` is the only place the admin talks to the API.
+  - It uses same-origin relative URLs and validates every `{ok, data}` envelope.
+  - It adds `X-CSRF-Token` to every mutation.
+  - A 401 `not_authenticated` returns the UI to the login with a Swedish notice.
+  - A `csrf_failed` triggers one session check: either the in-memory token is
+    replaced (the user tries again) or the UI returns to the login. There is
+    never an automatic retry.
+- **CSRF token:** kept in memory only, never in localStorage, sessionStorage,
+  cookies or URLs. A page refresh gets the current token from
+  `GET /api/admin/session`.
+- **Errors:** backend messages are never shown. `lib/adminErrors.ts` maps error
+  codes to Swedish text, with one generic fallback.
+- **Uploads:** each photo is prepared in the browser with `createImageVariants()`
+  and sent in **sequential batches** of `ADMIN_UPLOAD_BATCH_SIZE` (10).
+  - Each photo is two files, and PHP's `max_file_uploads` is 20 locally.
+    **Check Loopia's `max_file_uploads` at deployment and lower the constant
+    if it is smaller.**
+  - If a batch fails, the rest stop. Earlier batches stay uploaded, the user is
+    told how many succeeded, and only the files that were not uploaded remain
+    selected.
+- **Sessions:** the server's 30-minute idle timeout is authoritative.
+  - The dashboard also logs out after 30 minutes without input (UX only).
+  - Leaving `/admin` through the site navigation logs out, as before.
+  - Closing the tab relies on the server timeout.
+
 ## Tests
 
 ```bash
 php -l php/src/*.php
 php php/tests/smoke.php
+npm test        # admin frontend logic (tests/admin.test.ts, Node's built-in test runner)
 ```
 
 The smoke tests cover configuration validation, error hiding in production,

@@ -1,17 +1,39 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { adminData } from '@/lib/data/admin'
-import type { Category, Photo, StorageUsage } from '@/lib/types'
-
-// The admin still reads Supabase until the PHP admin backend exists.
-const { getPhotos, getStorageUsage, getCategories, getHeroImageUrl } = adminData
-import { useRouter } from 'next/navigation'
+import type { Category, Photo } from '@/lib/types'
 import Navbar from '@/components/Navbar'
-import { compressImage } from '@/lib/compressImage'
+import {
+  ADMIN_UPLOAD_BATCH_SIZE,
+  AdminApiError,
+  MAX_BULK_DELETE,
+  uploadInBatches,
+  type AdminApi,
+  type AdminStorageUsage,
+  type UploadItem,
+} from '@/lib/adminApi'
+import { adminErrorCode, adminErrorMessage, isAuthLost } from '@/lib/adminErrors'
+import { createHeroImageVariant, createImageVariants } from '@/lib/imageVariants'
 
+type AdminDashboardProps = {
+  /** PHP admin client from AdminApp (session cookie + in-memory CSRF token). */
+  api: AdminApi
+  onLogout: () => Promise<void>
+}
 
-export default function AdminDashboard() {
+/** Shows an action's failure in Swedish. Silent when the session is gone: AdminApp shows the login. */
+function reportError(prefix: string, error: unknown) {
+  if (isAuthLost(error)) return
+  console.error(prefix, adminErrorCode(error) ?? 'unknown_error')
+  alert(`${prefix}: ${adminErrorMessage(error)}`)
+}
+
+/** Browser-side image preparation failed: keep known codes (e.g. no WebP), otherwise image_processing. */
+function preparationError(error: unknown): unknown {
+  return adminErrorCode(error) !== null ? error : new AdminApiError('image_processing', 0)
+}
+
+export default function AdminDashboard({ api, onLogout }: AdminDashboardProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const [photos, setPhotos] = useState<Photo[]>([])
@@ -29,7 +51,9 @@ export default function AdminDashboard() {
   const [title, setTitle] = useState('')
   const [location, setLocation] = useState('')
   const [date, setDate] = useState('')
-  const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null)
+  const [storageUsage, setStorageUsage] = useState<AdminStorageUsage | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null)
 
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [savingHero, setSavingHero] = useState(false)
@@ -45,12 +69,12 @@ export default function AdminDashboard() {
   const [editDate, setEditDate] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
 
-  const STORAGE_LIMIT_MB = 500
-  const usedMb = storageUsage?.total_mb ?? 0
-  const remainingMb = STORAGE_LIMIT_MB - usedMb
-  const usedPercent = Math.min((usedMb / STORAGE_LIMIT_MB) * 100, 100)
-
-  const router = useRouter()
+  // Quota and remaining space come from the server (MEDIA_QUOTA_MB).
+  const remainingMb = storageUsage?.remaining_mb ?? 0
+  const usedPercent =
+    storageUsage && storageUsage.quota_bytes > 0
+      ? Math.min((storageUsage.total_bytes / storageUsage.quota_bytes) * 100, 100)
+      : 0
 
   useEffect(() => {
     loadPhotos()
@@ -58,8 +82,11 @@ export default function AdminDashboard() {
   }, [])
 
 async function loadHeroImage() {
-  const url = await getHeroImageUrl()
-  setCurrentHeroUrl(url)
+  try {
+    setCurrentHeroUrl(await api.getHero())
+  } catch (error) {
+    if (!isAuthLost(error)) console.error('Hero lookup failed', adminErrorCode(error))
+  }
 }
 
 function selectHeroFile(file: File | null) {
@@ -86,38 +113,40 @@ function selectHeroFile(file: File | null) {
   async function loadPhotos() {
     setLoading(true)
 
-    const [photoData, usageData, categoryData] = await Promise.all([
-      getPhotos(),
-      getStorageUsage(),
-      getCategories(),
-    ])
+    try {
+      const [photoData, usageData, categoryData] = await Promise.all([
+        api.getPhotos(),
+        api.getStorageUsage(),
+        api.getCategories(),
+      ])
 
-    setPhotos(photoData)
-    setStorageUsage(usageData)
-    setCategories(categoryData)
+      setPhotos(photoData)
+      setStorageUsage(usageData)
+      setCategories(categoryData)
+      setLoadError(null)
 
-    if (categoryData.length > 0) {
-      const categoryStillExists = categoryData.some((cat) => cat.key === category)
+      // Drop selections of photos that no longer exist.
+      setSelectedPhotoIds((current) => current.filter((id) => photoData.some((photo) => photo.id === id)))
 
-      if (!categoryStillExists) {
-        setCategory(categoryData[0].key)
+      if (categoryData.length > 0) {
+        const categoryStillExists = categoryData.some((cat) => cat.key === category)
+
+        if (!categoryStillExists) {
+          setCategory(categoryData[0].key)
+        }
       }
+    } catch (error) {
+      if (!isAuthLost(error)) {
+        console.error('Admin data could not be loaded', adminErrorCode(error))
+        setLoadError(`Kunde inte hämta foton: ${adminErrorMessage(error)}`)
+      }
+    } finally {
+      setLoading(false)
     }
-
-    setLoading(false)
   }
 
   async function handleLogout() {
-    const res = await fetch('/api/admin/logout', {
-      method: 'POST',
-    })
-
-    if (!res.ok) {
-      console.error('Logout failed')
-      return
-    }
-
-    router.refresh()
+    await onLogout()
   }
 
 
@@ -131,99 +160,47 @@ async function uploadFiles(files: File[]) {
     return
   }
 
+  const images = files.filter((file) => file.type.startsWith('image/'))
+
+  if (images.length === 0) {
+    alert('Kunde inte ladda upp fotona: Inga giltiga bilder valdes.')
+    return
+  }
+
   setUploading(true)
 
-  try {
-    const compressedFiles: File[] = []
-    const originalNames: string[] = []
+  const metadata = { category, title, location, date }
 
-    for (const originalFile of files) {
-      if (!originalFile.type.startsWith('image/')) {
-        console.warn(
-          `${originalFile.name} is not an image`
-        )
-        continue
-      }
+  // Sequential requests of at most ADMIN_UPLOAD_BATCH_SIZE photos each (full
+  // image + thumbnail per photo). A failed batch stops the rest; batches that
+  // already succeeded stay uploaded.
+  const result = await uploadInBatches(images, ADMIN_UPLOAD_BATCH_SIZE, async (batch, index, total) => {
+    setUploadProgress({ current: index + 1, total })
 
+    const items: UploadItem[] = []
+    for (const file of batch) {
       try {
-        const compressedFile = await compressImage(
-          originalFile,
-          {
-            maxWidth: 2000,
-            maxHeight: 2000,
-            quality: 0.84,
-            outputType: 'image/webp',
-          }
-        )
-
-        compressedFiles.push(compressedFile)
-        originalNames.push(originalFile.name)
+        const variants = await createImageVariants(file)
+        items.push({ full: variants.full, thumbnail: variants.thumbnail, originalName: file.name })
       } catch (error) {
-        console.error(
-          `Could not compress ${originalFile.name}:`,
-          error
-        )
-
-        throw new Error(
-          `Kunde inte komprimera ${originalFile.name}`
-        )
+        throw preparationError(error)
       }
     }
 
-    if (compressedFiles.length === 0) {
-      throw new Error(
-        'Inga giltiga bilder kunde bearbetas.'
-      )
-    }
+    await api.uploadPhotos(items, metadata)
 
-    const formData = new FormData()
+    // Uploaded files leave the selection at once, so a retry never sends them again.
+    setSelectedFiles((current) => current.filter((file) => !batch.includes(file)))
+  })
 
-    for (const compressedFile of compressedFiles) {
-      formData.append('files', compressedFile)
-    }
+  setUploadProgress(null)
+  setUploading(false)
 
-    formData.append(
-      'originalNames',
-      JSON.stringify(originalNames)
-    )
+  if (result.error !== null && isAuthLost(result.error)) {
+    return
+  }
 
-    formData.append('category', category)
-    formData.append('title', title)
-    formData.append('location', location)
-    formData.append('date', date)
-
-    const response = await fetch(
-      '/api/admin/photos/upload',
-      {
-        method: 'POST',
-        credentials: 'same-origin',
-        body: formData,
-      }
-    )
-
-    const responseText = await response.text()
-
-    let result: {
-      success?: boolean
-      uploadedCount?: number
-      error?: string
-    } | null = null
-
-    if (responseText) {
-      try {
-        result = JSON.parse(responseText)
-      } catch {
-        result = null
-      }
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        result?.error ||
-          `Upload failed with status ${response.status}`
-      )
-    }
-
+  if (result.error === null) {
     setTitle('')
     setLocation('')
     setDate('')
@@ -233,22 +210,20 @@ async function uploadFiles(files: File[]) {
       fileInputRef.current.value = ''
     }
 
-    await loadPhotos()
-
-    console.log(
-      `${result?.uploadedCount ?? compressedFiles.length} photos uploaded`
+    console.log(`${result.uploaded.length} photos uploaded`)
+  } else if (result.uploaded.length > 0) {
+    console.error('Gallery upload stopped', adminErrorCode(result.error) ?? 'unknown_error')
+    alert(
+      `${result.uploaded.length} av ${images.length} foton laddades upp. ` +
+        `De övriga ${result.notUploaded.length} laddades inte upp: ${adminErrorMessage(result.error)} ` +
+        'De finns kvar i listan, så du kan försöka igen.'
     )
-  } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'Unknown upload error'
-
-    console.error('Gallery upload failed:', message)
-    alert(`Kunde inte ladda upp fotona: ${message}`)
-  } finally {
-    setUploading(false)
+  } else {
+    reportError('Kunde inte ladda upp fotona', result.error)
   }
+
+  // Show the server's actual state, also after a partial failure.
+  await loadPhotos()
 }
 
 
@@ -260,32 +235,17 @@ async function deletePhoto(photo: Photo) {
   if (!confirmed) return
 
   try {
-    const response = await fetch(
-      `/api/admin/photos/${encodeURIComponent(photo.id)}`,
-      {
-        method: 'DELETE',
-        credentials: 'same-origin',
-      }
-    )
-
-    const result = await response.json()
-
-    if (!response.ok) {
-      throw new Error(result.error || 'Delete failed')
-    }
+    await api.deletePhoto(photo.id)
 
     setSelectedPhotoIds((current) =>
       current.filter((id) => id !== photo.id)
     )
-
-    await loadPhotos()
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Unknown error'
-
-    console.error('Photo delete failed:', message)
-    alert(`Kunde inte radera fotot: ${message}`)
+    reportError('Kunde inte radera fotot', error)
+    if (isAuthLost(error)) return
   }
+
+  await loadPhotos()
 }
 
     function startEditing(photo: Photo) {
@@ -318,45 +278,14 @@ async function saveHeroPhoto() {
   setSavingHero(true)
 
   try {
-    const compressedHero = await compressImage(heroFile, {
-      maxWidth: 2560,
-      maxHeight: 2560,
-      quality: 0.88,
-      outputType: 'image/webp',
-    })
-
-    const formData = new FormData()
-    formData.append('file', compressedHero)
-
-    const response = await fetch('/api/admin/hero', {
-      method: 'POST',
-      credentials: 'same-origin',
-      body: formData,
-    })
-
-    const responseText = await response.text()
-
-    let result: {
-      success?: boolean
-      path?: string
-      url?: string
-      error?: string
-    } | null = null
-
-    if (responseText) {
-      try {
-        result = JSON.parse(responseText)
-      } catch {
-        result = null
-      }
+    let prepared: File
+    try {
+      prepared = (await createHeroImageVariant(heroFile)).file
+    } catch (error) {
+      throw preparationError(error)
     }
 
-    if (!response.ok) {
-      throw new Error(
-        result?.error ||
-          `Hero replacement failed with status ${response.status}`
-      )
-    }
+    const result = await api.uploadHero(prepared)
 
     setHeroFile(null)
 
@@ -370,22 +299,12 @@ async function saveHeroPhoto() {
       heroFileInputRef.current.value = ''
     }
 
-    if (result?.url) {
-      setCurrentHeroUrl(result.url)
-    } else {
-      await loadHeroImage()
-    }
+    // A new hero always gets a new URL, so no cache-busting is needed.
+    setCurrentHeroUrl(result.url)
 
     await loadPhotos()
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'Unknown hero replacement error'
-
-    console.error('Hero replacement failed:', message)
-
-    alert(`Kunde inte uppdatera landningsbilden: ${message}`)
+    reportError('Kunde inte uppdatera landningsbilden', error)
   } finally {
     setSavingHero(false)
   }
@@ -396,37 +315,21 @@ async function savePhotoEdit(photoId: string) {
   setSavingEdit(true)
 
   try {
-    const response = await fetch(
-      `/api/admin/photos/${encodeURIComponent(photoId)}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          category: editCategory,
-          location: editLocation || null,
-          date: editDate || null,
-        }),
-      }
+    // All four keys, always: null clears location/date. Title is not editable.
+    const updated = await api.updatePhoto({
+      id: photoId,
+      category: editCategory,
+      location: editLocation.trim() || null,
+      date: editDate || null,
+    })
+
+    setPhotos((current) =>
+      current.map((photo) => (photo.id === updated.id ? updated : photo))
     )
 
-    const result = await response.json()
-
-    if (!response.ok) {
-      throw new Error(result.error || 'Update failed')
-    }
-
     cancelEditing()
-    await loadPhotos()
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'Unknown update error'
-
-    console.error('Photo update failed:', message)
-    alert(`Kunde inte uppdatera fotot: ${message}`)
+    reportError('Kunde inte uppdatera fotot', error)
   } finally {
     setSavingEdit(false)
   }
@@ -449,6 +352,11 @@ async function deleteSelectedPhotos() {
     return
   }
 
+  if (selectedPhotoIds.length > MAX_BULK_DELETE) {
+    alert(`Du kan radera högst ${MAX_BULK_DELETE} foton åt gången.`)
+    return
+  }
+
   const confirmed = window.confirm(
     `Vill du radera ${selectedPhotoIds.length} markerade foton?`
   )
@@ -457,62 +365,24 @@ async function deleteSelectedPhotos() {
 
   setDeletingSelected(true)
 
+  let refresh = true
+
   try {
-    const response = await fetch(
-      '/api/admin/photos/bulk-delete',
-      {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          photoIds: selectedPhotoIds,
-        }),
-      }
-    )
+    const result = await api.bulkDeletePhotos(selectedPhotoIds)
 
-    const responseText = await response.text()
-
-    let result: {
-      success?: boolean
-      deletedCount?: number
-      error?: string
-    } | null = null
-
-    if (responseText) {
-      try {
-        result = JSON.parse(responseText)
-      } catch {
-        result = null
-      }
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        result?.error ||
-          `Bulk deletion failed with status ${response.status}`
-      )
-    }
-
+    // Photos that were already gone (notFoundIds) need no message.
     setSelectedPhotoIds([])
 
-    await loadPhotos()
-
-    console.log(
-      `${result?.deletedCount ?? selectedPhotoIds.length} photos deleted`
-    )
+    console.log(`${result.deletedCount} photos deleted`)
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'Unknown bulk deletion error'
-
-    console.error('Bulk deletion failed:', message)
-
-    alert(`Kunde inte radera fotona: ${message}`)
+    reportError('Kunde inte radera fotona', error)
+    refresh = !isAuthLost(error)
   } finally {
     setDeletingSelected(false)
+  }
+
+  if (refresh) {
+    await loadPhotos()
   }
 }
 
@@ -543,59 +413,16 @@ async function handleAddCategory() {
   setCategoryLoading(true)
 
   try {
-    const response = await fetch('/api/admin/categories', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        label,
-      }),
-    })
-
-    const responseText = await response.text()
-
-    let result: {
-      success?: boolean
-      category?: {
-        key: string
-        label: string
-      }
-      error?: string
-    } | null = null
-
-    if (responseText) {
-      try {
-        result = JSON.parse(responseText)
-      } catch {
-        result = null
-      }
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        result?.error ||
-          `Category creation failed with status ${response.status}`
-      )
-    }
+    // The server normalises the label and generates the key.
+    const created = await api.createCategory(label)
 
     setNewCategoryLabel('')
 
     await loadPhotos()
 
-    if (result?.category?.key) {
-      setCategory(result.category.key)
-    }
+    setCategory(created.key)
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'Unknown category creation error'
-
-    console.error('Category creation failed:', message)
-
-    alert(`Kunde inte lägga till kategorin: ${message}`)
+    reportError('Kunde inte lägga till kategorin', error)
   } finally {
     setCategoryLoading(false)
   }
@@ -619,39 +446,8 @@ async function handleDeleteCategory(
   setCategoryLoading(true)
 
   try {
-    const response = await fetch(
-      `/api/admin/categories/${encodeURIComponent(key)}`,
-      {
-        method: 'DELETE',
-        credentials: 'same-origin',
-      }
-    )
-
-    const responseText = await response.text()
-
-    let result: {
-      success?: boolean
-      deletedCategory?: {
-        key: string
-        label: string
-      }
-      error?: string
-    } | null = null
-
-    if (responseText) {
-      try {
-        result = JSON.parse(responseText)
-      } catch {
-        result = null
-      }
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        result?.error ||
-          `Category deletion failed with status ${response.status}`
-      )
-    }
+    // The server moves the photos to Okategoriserad and deletes the category in one transaction.
+    await api.deleteCategory(key)
 
     // Avoid keeping a deleted category selected in the upload form.
     if (category === key) {
@@ -665,14 +461,7 @@ async function handleDeleteCategory(
 
     await loadPhotos()
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'Unknown category deletion error'
-
-    console.error('Category deletion failed:', message)
-
-    alert(`Kunde inte radera kategorin: ${message}`)
+    reportError('Kunde inte radera kategorin', error)
   } finally {
     setCategoryLoading(false)
   }
@@ -930,7 +719,12 @@ function getCategoryLabel(key: string) {
             </p>
 
             <p style={{ color: '#666', marginBottom: 0 }}>
-              eller klicka för att välja filer <br /> (max {remainingMb.toFixed(2)} MB kvar)
+              eller klicka för att välja filer
+              {storageUsage && (
+                <>
+                  <br /> (max {remainingMb.toFixed(2)} MB kvar)
+                </>
+              )}
             </p>
           </div>
           {selectedFiles.length > 0 && (
@@ -1075,7 +869,11 @@ function getCategoryLabel(key: string) {
                 opacity: uploading ? 0.6 : 1,
               }}
             >
-              {uploading ? 'Laddar upp...' : 'Ladda upp valda foton'}
+              {uploading
+                ? uploadProgress && uploadProgress.total > 1
+                  ? `Laddar upp ${uploadProgress.current} av ${uploadProgress.total}…`
+                  : 'Laddar upp...'
+                : 'Ladda upp valda foton'}
             </button>
           </div>
         )}
@@ -1437,6 +1235,10 @@ function getCategoryLabel(key: string) {
           )}
         </div>
           </div>
+
+          {loadError && (
+            <p role="alert" style={{ color: '#ff6b6b' }}>{loadError}</p>
+          )}
 
           {loading ? (
             <p style={{ color: '#777' }}>Laddar foton...</p>

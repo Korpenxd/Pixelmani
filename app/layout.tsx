@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
-import AdminSessionGuard from '@/components/AdminSessionGuard'
 import { ogImage } from '@/lib/metadata'
 import { allowIndexing, siteConfig, siteUrl } from '@/lib/site'
 
@@ -101,7 +100,6 @@ export default function RootLayout({
           Hoppa till innehållet
         </a>
 
-        <AdminSessionGuard />
         {children}
       </body>
     </html>

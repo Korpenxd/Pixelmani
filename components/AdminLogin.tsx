@@ -2,8 +2,17 @@
 
 import { useState } from 'react'
 import Navbar from '@/components/Navbar'
+import type { AdminApi } from '@/lib/adminApi'
+import { adminErrorMessage } from '@/lib/adminErrors'
 
-export default function AdminLogin() {
+type AdminLoginProps = {
+  api: AdminApi
+  /** Why the user is here, e.g. an expired session. */
+  notice: string | null
+  onLoggedIn: (csrfToken: string) => void
+}
+
+export default function AdminLogin({ api, notice, onLoggedIn }: AdminLoginProps) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -13,19 +22,14 @@ export default function AdminLogin() {
     setLoading(true)
     setError('')
 
-    const res = await fetch('/api/admin/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
-    })
-
-    if (!res.ok) {
-      setError('Fel lösenord')
+    try {
+      const csrfToken = await api.login(password)
+      setPassword('')
+      onLoggedIn(csrfToken)
+    } catch (loginError) {
+      setError(adminErrorMessage(loginError))
       setLoading(false)
-      return
     }
-
-    window.location.reload()
   }
 
   return (
@@ -92,6 +96,7 @@ export default function AdminLogin() {
         </button>
 
         {error && <p style={{ color: '#ff6b6b' }}>{error}</p>}
+        {!error && notice && <p style={{ color: '#aaa' }}>{notice}</p>}
       </form>
     </main>
     </>

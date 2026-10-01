@@ -11,7 +11,7 @@
  * Aspect ratio is kept and small images are never upscaled. The server
  * checks every file against exactly these limits.
  *
- * Not used by the current admin yet; it still uses compressImage().
+ * Used by the admin dashboard (components/AdminDashboard.tsx).
  */
 
 export const FULL_MAX_DIMENSION = 2000
