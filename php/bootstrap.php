@@ -41,6 +41,9 @@ require_once __DIR__ . '/src/Input.php';
 require_once __DIR__ . '/src/PhotoAdmin.php';
 require_once __DIR__ . '/src/CategoryAdmin.php';
 require_once __DIR__ . '/src/HeroUploader.php';
+require_once __DIR__ . '/src/ContactConfig.php';
+require_once __DIR__ . '/src/ContactForm.php';
+require_once __DIR__ . '/src/PhpMailerTransport.php';
 require_once __DIR__ . '/src/App.php';
 
 use PixelMani\App;

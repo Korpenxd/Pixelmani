@@ -1,0 +1,17 @@
+{
+    "name": "pixelmani/backend",
+    "description": "PixelMani PHP backend (runtime dependencies only).",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.2",
+        "phpmailer/phpmailer": "^7.1"
+    },
+    "config": {
+        "platform": {
+            "php": "8.2.0"
+        },
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}

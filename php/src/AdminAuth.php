@@ -142,19 +142,13 @@ final class AdminAuth
         $this->logger->info('Admin logged out', ['client' => self::clientRef()]);
     }
 
-    /**
-     * REMOTE_ADDR only. X-Forwarded-For / X-Real-IP are client-controlled and
-     * there is no trusted proxy in front of this application.
-     */
     private static function clientAddress(): string
     {
-        $address = $_SERVER['REMOTE_ADDR'] ?? '';
-        return is_string($address) && $address !== '' ? $address : 'unknown';
+        return Http::clientAddress();
     }
 
-    /** Short, non-reversible reference for logs, instead of the raw IP address. */
     private static function clientRef(): string
     {
-        return substr(hash('sha256', 'pixelmani-client|' . self::clientAddress()), 0, 12);
+        return Http::clientRef();
     }
 }

@@ -1,6 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  CONTACT_HONEYPOT_FIELD,
+  CONTACT_LIMITS,
+  contactErrorMessage,
+  sendContactMessage,
+} from '@/lib/contactApi'
 
 export default function ContactSection() {
 const [formData, setFormData] = useState({
@@ -11,6 +17,13 @@ meddelande: '',
 
 const [submitted, setSubmitted] = useState(false)
 const [sending, setSending] = useState(false)
+const [error, setError] = useState<string | null>(null)
+
+// Blocks a second submit even before React re-renders the disabled button.
+const inFlight = useRef(false)
+
+// Honeypot: real visitors never see or fill this field.
+const [honeypot, setHoneypot] = useState('')
 
 useEffect(() => {
 if (!submitted) return
@@ -29,35 +42,23 @@ const handleSubmit = async (
 e: React.FormEvent<HTMLFormElement>
 ) => {
 e.preventDefault()
-setSending(true)
 
+// One request at a time.
+if (inFlight.current) return
+inFlight.current = true
+
+setSending(true)
+setError(null)
 
 try {
-  /*
-    Replace this section with your actual form submission logic.
-
-    IMPORTANT:
-    Only call setSubmitted(true) after the API confirms
-    that the message was successfully sent.
-
-    Example:
-
-    const response = await fetch('/api/contact', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(formData),
-    })
-
-    if (!response.ok) {
-      throw new Error('Kunde inte skicka meddelandet')
-    }
-  */
-
-  // Temporary simulated request
-  await new Promise((resolve) =>
-    setTimeout(resolve, 800)
+  // Resolves only when the server has handed the message to the mail server.
+  await sendContactMessage(
+    {
+      name: formData.namn,
+      email: formData.email,
+      message: formData.meddelande,
+    },
+    honeypot
   )
 
   setSubmitted(true)
@@ -68,9 +69,11 @@ try {
     email: '',
     meddelande: '',
   })
-} catch (error) {
-  console.error('Kunde inte skicka meddelandet:', error)
+} catch (sendError) {
+  // Keep what the visitor wrote; show a Swedish message, never server details.
+  setError(contactErrorMessage(sendError))
 } finally {
+  inFlight.current = false
   setSending(false)
 }
 
@@ -276,6 +279,7 @@ Kontakt </h2>
             name="name"
             autoComplete="name"
             required
+            maxLength={CONTACT_LIMITS.nameMax}
             value={formData.namn}
             onChange={(e) =>
               setFormData({
@@ -311,6 +315,7 @@ Kontakt </h2>
             autoComplete="email"
             inputMode="email"
             required
+            maxLength={CONTACT_LIMITS.emailMax}
             value={formData.email}
             onChange={(e) =>
               setFormData({
@@ -344,6 +349,7 @@ Kontakt </h2>
             name="message"
             autoComplete="off"
             required
+            maxLength={CONTACT_LIMITS.messageMax}
             rows={5}
             value={formData.meddelande}
             onChange={(e) => {
@@ -371,6 +377,31 @@ Kontakt </h2>
             onBlur={(e) => {
               e.currentTarget.style.borderColor = '#333'
             }}
+          />
+        </div>
+
+        {/* Honeypot: off-screen, not focusable and hidden from assistive
+            technology, so people never fill it; simple bots do. */}
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: '-10000px',
+            top: 'auto',
+            width: '1px',
+            height: '1px',
+            overflow: 'hidden',
+          }}
+        >
+          <label htmlFor="contact-homepage">Lämna tomt</label>
+          <input
+            id="contact-homepage"
+            type="text"
+            name={CONTACT_HONEYPOT_FIELD}
+            tabIndex={-1}
+            autoComplete="off"
+            value={honeypot}
+            onChange={(e) => setHoneypot(e.target.value)}
           />
         </div>
 
@@ -410,6 +441,20 @@ Kontakt </h2>
         >
           {sending ? 'Skickar...' : 'Skicka'}
         </button>
+
+        {error && (
+          <p
+            role="alert"
+            style={{
+              margin: 0,
+              fontSize: '0.82rem',
+              color: '#e57373',
+              lineHeight: 1.6,
+            }}
+          >
+            {error}
+          </p>
+        )}
       </form>
 
       {/* Success message */}

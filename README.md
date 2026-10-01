@@ -4,6 +4,7 @@ Fotosajt för Per-Arne Hederstaf. Frontend i Next.js (App Router) som byggs till
 
 - **Publika sidor:** `/` (start) och `/showcase` (bildgalleri).
 - **Admin:** `/admin` — inloggning, uppladdning av bilder, kategorier och val av landningsbild. Sidan är `noindex` och blockerad i `robots.txt`.
+- **Kontaktformulär:** på `/showcase`. Skickas som e-post via `POST /api/contact` (PHP + PHPMailer + SMTP). Inget sparas och inga cookies används.
 - **Data:** bilder, kategorier och inställningar ligger i MySQL/MariaDB; bildfilerna under `/media`. Backend och API beskrivs i [`php/README.md`](php/README.md), databasen i [`db/README.md`](db/README.md).
 
 ## Arkitektur
@@ -26,8 +27,11 @@ Kräver Laragon (Apache + PHP + MySQL) enligt [`php/README.md`](php/README.md#lo
 
 ```bash
 npm install
-npm run dev        # next dev på port 3000
+(cd php && composer install)   # PHPMailer för kontaktformuläret → php/vendor/
+npm run dev                    # next dev på port 3000
 ```
+
+Lokalt går kontaktformulärets e-post till Laragons Mailpit (<http://127.0.0.1:8025>) och skickas aldrig vidare. Inställningarna finns i `.env.loopia.example` och under "Contact form" i [`php/README.md`](php/README.md#contact-form).
 
 Öppna sedan <http://pixelmani.test/>. Laragons vhost (`php/dev/apache-vhost.local.conf`) ger hela sajten en origin: `/api/*` och `/media/*` går till PHP, allt annat proxas till `next dev`. Därför fungerar adminens session, Origin-kontroll och CSRF precis som i produktion. `allowedDevOrigins` i `next.config.ts` gäller bara `next dev`.
 
@@ -44,7 +48,7 @@ NEXT_PUBLIC_SITE_URL=https://pixelmani.se
 PIXELMANI_BUILD_API_BASE=http://pixelmani.test/api
 ```
 
-Backendens inställningar (databas, `ADMIN_PASSWORD_HASH` m.m.) ligger i `.env.loopia.local` lokalt eller i serverns miljö/`php/config/config.php`. Mallen finns i [`.env.loopia.example`](.env.loopia.example).
+Backendens inställningar (databas, `ADMIN_PASSWORD_HASH`, SMTP för kontaktformuläret m.m.) ligger i `.env.loopia.local` lokalt eller i serverns miljö/`php/config/config.php`. Mallen finns i [`.env.loopia.example`](.env.loopia.example).
 
 ### Verktyg för slutlig datasynk (tillfälligt)
 
@@ -80,7 +84,7 @@ node php/dev/serve-static.mjs stop
 
 ## Drift
 
-Apache + PHP 8.3 + MariaDB/MySQL. Ingen Node.js.
+Apache + PHP 8.3 + MariaDB/MySQL. Ingen Node.js. `php/vendor/` (PHPMailer) byggs med `composer install --no-dev` och följer med i driftpaketet, så servern behöver inte Composer. Kontaktformuläret kräver ett riktigt e-postkonto hos Loopia: SMTP via `mailcluster.loopia.se`, port 587, STARTTLS.
 
 Säkerhetsheaders, omdirigeringen `www` → apex och regler för rena URL:er (`/showcase` → `showcase.html`) ska ligga i Apache. De sattes tidigare av Next.js. Exakta värden och krav finns under **Apache handoff** i [`php/README.md`](php/README.md#apache-handoff-phase-10).
 

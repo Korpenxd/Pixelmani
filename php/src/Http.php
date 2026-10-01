@@ -105,6 +105,23 @@ final class Http
         }
     }
 
+    /**
+     * The client's address for rate limiting: REMOTE_ADDR only.
+     * X-Forwarded-For / X-Real-IP are client-controlled and there is no
+     * trusted proxy in front of this application.
+     */
+    public static function clientAddress(): string
+    {
+        $address = $_SERVER['REMOTE_ADDR'] ?? '';
+        return is_string($address) && $address !== '' ? $address : 'unknown';
+    }
+
+    /** Short, non-reversible reference for logs, instead of the raw IP address. */
+    public static function clientRef(): string
+    {
+        return substr(hash('sha256', 'pixelmani-client|' . self::clientAddress()), 0, 12);
+    }
+
     /** "scheme://host[:port]" in lower case, default ports omitted; null if not an http(s) origin. */
     public static function origin(string $url): ?string
     {

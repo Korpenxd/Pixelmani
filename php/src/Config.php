@@ -25,6 +25,7 @@ final class Config
         'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_CHARSET',
         'LOG_DIR', 'UPLOAD_URL_BASE', 'STORAGE_DIR',
         ...self::ADMIN_KEYS,
+        ...self::CONTACT_KEYS,
     ];
 
     /**
@@ -37,6 +38,18 @@ final class Config
         'ADMIN_PASSWORD_HASH', 'SESSION_NAME', 'SESSION_IDLE_SECONDS', 'COOKIE_SECURE',
         'LOGIN_RATE_LIMIT_MAX', 'LOGIN_RATE_LIMIT_WINDOW',
         'MEDIA_DIR', 'MAX_UPLOAD_BYTES', 'MAX_FILES_PER_REQUEST', 'MEDIA_QUOTA_MB',
+    ];
+
+    /**
+     * Contact-form settings (SMTP and addresses). Like the admin settings they
+     * are carried unvalidated and only checked by ContactConfig when
+     * POST /api/contact runs, so a missing or broken mail setup never affects
+     * the other endpoints.
+     */
+    public const CONTACT_KEYS = [
+        'SMTP_HOST', 'SMTP_PORT', 'SMTP_ENCRYPTION', 'SMTP_USERNAME', 'SMTP_PASSWORD',
+        'CONTACT_TO', 'CONTACT_FROM', 'CONTACT_FROM_NAME',
+        'CONTACT_RATE_LIMIT_MAX', 'CONTACT_RATE_LIMIT_WINDOW',
     ];
 
     /** URL path under which stored photo files are served, on the same origin. */
@@ -58,12 +71,20 @@ final class Config
         public readonly ?string $storageDir,
         /** @var array<string, ?string> raw admin settings, see ADMIN_KEYS */
         #[\SensitiveParameter] private readonly array $adminSettings = [],
+        /** @var array<string, ?string> raw contact settings, see CONTACT_KEYS */
+        #[\SensitiveParameter] private readonly array $contactSettings = [],
     ) {}
 
     /** Raw admin setting (trimmed), or null when not set. Validated by AdminConfig. */
     public function adminSetting(string $key): ?string
     {
         return $this->adminSettings[$key] ?? null;
+    }
+
+    /** Raw contact/SMTP setting (trimmed), or null when not set. Validated by ContactConfig. */
+    public function contactSetting(string $key): ?string
+    {
+        return $this->contactSettings[$key] ?? null;
     }
 
     public function isLocal(): bool
@@ -215,6 +236,10 @@ final class Config
             adminSettings: array_combine(
                 self::ADMIN_KEYS,
                 array_map(static fn (string $key): ?string => is_scalar($raw[$key] ?? null) ? trim((string) $raw[$key]) : null, self::ADMIN_KEYS)
+            ),
+            contactSettings: array_combine(
+                self::CONTACT_KEYS,
+                array_map(static fn (string $key): ?string => is_scalar($raw[$key] ?? null) ? trim((string) $raw[$key]) : null, self::CONTACT_KEYS)
             ),
         );
     }

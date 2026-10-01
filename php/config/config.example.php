@@ -42,6 +42,20 @@ return [
     // 'MEDIA_QUOTA_MB' => '500',            // managed media: MEDIA_DIR/uploads + MEDIA_DIR/hero
     // The same MAX_UPLOAD_BYTES applies to the hero image (max 2560 × 2560 px).
 
+    // Contact form (POST /api/contact): authenticated SMTP via PHPMailer.
+    // Loopia: mailcluster.loopia.se, port 587, STARTTLS. Fill in the real
+    // mailbox at deployment; never commit it.
+    // 'SMTP_HOST' => 'mailcluster.loopia.se',
+    // 'SMTP_PORT' => '587',
+    // 'SMTP_ENCRYPTION' => 'tls',            // tls (STARTTLS) | ssl (implicit TLS)
+    // 'SMTP_USERNAME' => 'mailbox@example.com',
+    // 'SMTP_PASSWORD' => 'change-me',
+    // 'CONTACT_TO' => 'hej@pixelmani.se',
+    // 'CONTACT_FROM' => 'mailbox@example.com', // the site's sender; the visitor is only Reply-To
+    // 'CONTACT_FROM_NAME' => 'Pixelmani',
+    // 'CONTACT_RATE_LIMIT_MAX' => '5',        // attempts per IP ...
+    // 'CONTACT_RATE_LIMIT_WINDOW' => '900',   // ... per this many seconds
+
     // Optional. Writable, NOT web-accessible directory for admin sessions and
     // login rate-limit state. Defaults to php/storage.
     // 'STORAGE_DIR' => '/path/outside/web/root/storage',

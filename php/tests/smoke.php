@@ -29,10 +29,20 @@ require_once __DIR__ . '/../src/Input.php';
 require_once __DIR__ . '/../src/PhotoAdmin.php';
 require_once __DIR__ . '/../src/CategoryAdmin.php';
 require_once __DIR__ . '/../src/HeroUploader.php';
+require_once __DIR__ . '/../src/ContactConfig.php';
+require_once __DIR__ . '/../src/ContactForm.php';
+require_once __DIR__ . '/../src/PhpMailerTransport.php';
 require_once __DIR__ . '/upload-fixtures.php';
 
 use PixelMani\AdminConfig;
 use PixelMani\HttpException;
+use PixelMani\ContactConfig;
+use PixelMani\ContactForm;
+use PixelMani\ContactMessage;
+use PixelMani\Http;
+use PixelMani\MailTransport;
+use PixelMani\MailTransportException;
+use PixelMani\PhpMailerTransport;
 use PixelMani\CategoryAdmin;
 use PixelMani\HeroUploader;
 use PixelMani\Input;
@@ -607,6 +617,26 @@ foreach (['photos', 'categories', 'hero', 'hero-image', 'health'] as $endpoint) 
         $ok && str_contains($err, '@@STATUS@@' . PHP_SESSION_NONE) && !is_dir($storage . '/public/sessions'), substr($out, 0, 80));
 }
 
+foreach ([
+    'broken SMTP settings → 500, other endpoints unaffected' => [['SMTP_HOST' => 'not a host!'], '{"ok":false,"error":{"code":"configuration_error"'],
+    'valid settings, empty body → 400' => [['SMTP_HOST' => '127.0.0.1', 'SMTP_PORT' => '9', 'SMTP_ENCRYPTION' => 'none', 'CONTACT_TO' => 'hej@pixelmani.se', 'CONTACT_FROM' => 'webbplats@pixelmani.se'], '{"ok":false,"error":{"code":"invalid_request"'],
+] as $label => [$env, $expectedStart]) {
+    $placeholder = tempnam(sys_get_temp_dir(), 'pmp');
+    $file = $placeholder . '.php';
+    file_put_contents($file, "<?php\n\$_SERVER['REQUEST_METHOD'] = 'POST'; \$_SERVER['CONTENT_TYPE'] = 'application/json'; \$_COOKIE = ['pixelmani_admin' => 'some-admin-cookie'];\n"
+        . 'register_shutdown_function(function () { fwrite(STDERR, "@@STATUS@@" . session_status()); });' . "\n"
+        . 'require ' . var_export(realpath(__DIR__ . '/../public/api/contact.php'), true) . ';');
+    $process = proc_open([PHP_BINARY, $file], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, array_merge(getenv(), $publicEnv, $env));
+    $out = stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    proc_close($process);
+    @unlink($file);
+    @unlink($placeholder);
+    check("/api/contact, $label, starts no session",
+        str_starts_with($out, $expectedStart) && str_contains($err, '@@STATUS@@' . PHP_SESSION_NONE) && !is_dir($storage . '/public/sessions'), substr($out, 0, 90));
+}
 $r = adminScript('$result = "unreachable";', ['SESSION_IDLE_SECONDS' => 'broken'] + $authEnv, $sameOrigin);
 check('admin code with broken admin config fails as configuration_error', str_contains(json_encode($r), 'configuration_error'), json_encode($r));
 
@@ -1559,6 +1589,243 @@ removeTree($outsideDir);
 removeTree($mediaRoot);
 removeTree($work);
 removeTree($fixtureDir);
+
+// ── Contact form ────────────────────────────────────────────────────────────
+
+echo "\nContact: configuration (lazy)\n";
+
+$contactRoot = tempDir();
+$contactBase = [
+    'SMTP_HOST' => '127.0.0.1', 'SMTP_PORT' => '1025', 'SMTP_ENCRYPTION' => 'none',
+    'CONTACT_TO' => 'hej@pixelmani.se', 'CONTACT_FROM' => 'webbplats@pixelmani.se',
+    'STORAGE_DIR' => $contactRoot,
+];
+$contactConfig = static fn (array $over = [], array $base = []) => ContactConfig::fromConfig(Config::fromArray(validConfig($over + $base + $contactBase)), dirname(__DIR__));
+$contactError = static function (array $over, array $base = []) use ($contactConfig): ?string {
+    try {
+        $contactConfig($over, $base);
+        return null;
+    } catch (ConfigException $e) {
+        return $e->getMessage();
+    }
+};
+$prodContact = ['APP_ENV' => 'production', 'SITE_URL' => 'https://pixelmani.se', 'SMTP_ENCRYPTION' => 'tls', 'SMTP_PORT' => '587',
+    'SMTP_USERNAME' => 'webbplats@pixelmani.se', 'SMTP_PASSWORD' => 'S3cret-smtp-pass'];
+
+$loaded = Config::fromArray(validConfig(['SMTP_HOST' => 'not a host!', 'SMTP_PORT' => 'abc', 'CONTACT_TO' => 'nope']));
+check('broken contact settings do not stop the base configuration from loading', $loaded->contactSetting('SMTP_PORT') === 'abc');
+$c = $contactConfig();
+check('valid local config: Mailpit host/port, no auth, defaults for name and rate limit',
+    $c->smtpHost === '127.0.0.1' && $c->smtpPort === 1025 && $c->encryption === 'none' && $c->username === null
+    && $c->fromName === 'Pixelmani' && $c->rateLimitMax === 5 && $c->rateLimitWindow === 900
+    && str_replace('\\', '/', $c->rateLimitDir) === str_replace('\\', '/', $contactRoot) . '/rate-limit' && $c->siteHost === 'pixelmani.test');
+$c = $contactConfig(['SMTP_PORT' => '', 'SMTP_ENCRYPTION' => ''] + ['SMTP_HOST' => 'mailcluster.loopia.se']);
+check('defaults: port 587 with STARTTLS', $c->smtpPort === 587 && $c->encryption === 'tls');
+$p = $contactConfig($prodContact);
+check('production config with SMTP auth and STARTTLS accepted', $p->username === 'webbplats@pixelmani.se' && $p->password() === 'S3cret-smtp-pass' && $p->siteHost === 'pixelmani.se');
+check('SMTP password never appears in debug output', !str_contains(print_r($p, true), 'S3cret-smtp-pass') && !str_contains(var_export($p->__debugInfo(), true), 'S3cret-smtp-pass'));
+foreach ([
+    'missing SMTP_HOST' => [['SMTP_HOST' => '']],
+    'SMTP_HOST with spaces' => [['SMTP_HOST' => 'mail cluster']],
+    'SMTP_PORT out of range' => [['SMTP_PORT' => '70000']],
+    'unknown SMTP_ENCRYPTION' => [['SMTP_ENCRYPTION' => 'plain']],
+    'username without password' => [['SMTP_USERNAME' => 'x@pixelmani.se']],
+    'missing CONTACT_TO' => [['CONTACT_TO' => '']],
+    'invalid CONTACT_FROM' => [['CONTACT_FROM' => 'webbplats']],
+    'CONTACT_FROM with a newline' => [['CONTACT_FROM' => "a@pixelmani.se\nBcc: x@evil.example"]],
+    'CONTACT_FROM_NAME with a newline' => [['CONTACT_FROM_NAME' => "Pixelmani\r\nBcc: x@evil.example"]],
+    'rate limit 0' => [['CONTACT_RATE_LIMIT_MAX' => '0']],
+    'production without encryption' => [['SMTP_ENCRYPTION' => 'none'], $prodContact],
+    'production without SMTP auth' => [['SMTP_USERNAME' => '', 'SMTP_PASSWORD' => ''], $prodContact],
+] as $label => $args) {
+    check("config refused: $label", $contactError(...$args) !== null);
+}
+
+echo "\nContact: input validation\n";
+
+$code = static function (callable $fn): ?string {
+    try {
+        $fn();
+        return null;
+    } catch (HttpException $e) {
+        return $e->status . ' ' . $e->errorCode;
+    }
+};
+check('Swedish name kept (trimmed)', ContactForm::name('  Åsa Öberg-Ängström ') === 'Åsa Öberg-Ängström');
+foreach ([
+    'empty name' => ['name', '   ', '400 invalid_name'],
+    'name with CR/LF (header injection)' => ['name', "Åsa\r\nBcc: x@evil.example", '400 invalid_name'],
+    'name with a zero-width character' => ['name', "Å\u{200B}sa", '400 invalid_name'],
+    'name over 100 characters' => ['name', str_repeat('å', 101), '400 invalid_name'],
+    'name as a number' => ['name', 42, '400 invalid_request'],
+    'name as invalid UTF-8' => ['name', "\xC3\x28", '400 invalid_name'],
+    'invalid email' => ['email', 'not-an-email', '400 invalid_email'],
+    'email with CR/LF + Bcc (header injection)' => ['email', "x@example.com\r\nBcc: victim@example.com", '400 invalid_email'],
+    'email with a bare LF' => ['email', "x@example.com\nCc: victim@example.com", '400 invalid_email'],
+    'email with a space' => ['email', 'x y@example.com', '400 invalid_email'],
+    'email over 254 characters' => ['email', str_repeat('a', 64) . '@' . str_repeat('b', 190) . '.se', '400 invalid_email'],
+    'email as an array' => ['email', ['x@example.com'], '400 invalid_request'],
+    'empty message' => ['message', "  \n\t ", '400 invalid_message'],
+    'one-character message' => ['message', 'x', '400 invalid_message'],
+    'message over 5000 characters' => ['message', str_repeat('ö', 5001), '400 invalid_message'],
+    'message with NUL' => ['message', "Hej\x00då", '400 invalid_message'],
+    'message with ESC' => ['message', "Hej\x1Bdå", '400 invalid_message'],
+] as $label => [$field, $value, $expected]) {
+    check("$label → $expected", $code(fn () => ContactForm::$field($value)) === $expected);
+}
+check('email trimmed', ContactForm::email(' asa@example.com ') === 'asa@example.com');
+if (function_exists('idn_to_ascii')) {
+    check('internationalised domain converted to ASCII', ContactForm::email('asa@räksmörgås.se') === 'asa@xn--rksmrgs-5wao1o.se', ContactForm::email('asa@räksmörgås.se'));
+}
+check('message: CRLF becomes LF, tabs, Swedish punctuation and emoji kept',
+    ContactForm::message("Hej!\r\nRad två – «citat» …\tflik 👩‍👩‍👧\r\n") === "Hej!\nRad två – «citat» …\tflik 👩‍👩‍👧");
+check('message of exactly 5000 characters accepted', mb_strlen(ContactForm::message(str_repeat('ä', 5000))) === 5000);
+
+echo "\nContact: submission, honeypot, transport failure (fake transport)\n";
+
+final class FakeMailTransport implements MailTransport
+{
+    /** @var list<ContactMessage> */
+    public array $sent = [];
+
+    public function __construct(private readonly ?string $failWith = null) {}
+
+    public function send(ContactMessage $message): void
+    {
+        if ($this->failWith !== null) {
+            throw new MailTransportException($this->failWith);
+        }
+        $this->sent[] = $message;
+    }
+}
+
+$contactLogs = tempDir();
+$contactLogger = new Logger($contactLogs, 'smoke-contact');
+$now = 5_000_000;
+$contactClock = static function () use (&$now): int { return $now; };
+$makeForm = static function (MailTransport $transport, string $client = '203.0.113.7', array $over = []) use ($contactConfig, $contactLogger, $contactClock): ContactForm {
+    $config = $contactConfig($over);
+    return new ContactForm($config, new RateLimiter($config->rateLimitDir, $config->rateLimitMax, $config->rateLimitWindow, $contactClock, 0), $transport, $contactLogger, $client);
+};
+$visitor = ['name' => 'Åsa <b>Öberg</b>', 'email' => 'asa@example.com', 'message' => "Hej!\nVi vill boka en <script>alert(1)</script> porträttfotografering.\n\nMvh", 'homepage' => ''];
+
+$transport = new FakeMailTransport();
+$sent = $makeForm($transport)->submit($visitor);
+$m = $transport->sent[0] ?? null;
+check('valid submission handed to the transport once', $sent === true && count($transport->sent) === 1);
+check('To = CONTACT_TO, From = CONTACT_FROM (never the visitor), Reply-To = visitor',
+    $m?->to === 'hej@pixelmani.se' && $m?->from === 'webbplats@pixelmani.se' && $m?->fromName === 'Pixelmani'
+    && $m?->replyTo === 'asa@example.com' && $m?->replyToName === 'Åsa <b>Öberg</b>');
+check('fixed subject (no visitor input)', $m?->subject === 'Nytt meddelande via kontaktformuläret – pixelmani.test');
+check('plain-text body has name, address and the multiline message as written',
+    str_contains($m?->textBody ?? '', "Namn: Åsa <b>Öberg</b>\nE-post: asa@example.com") && str_contains($m?->textBody ?? '', "Vi vill boka en <script>alert(1)</script> porträttfotografering.\n\nMvh"));
+check('HTML body escapes visitor input and keeps line breaks',
+    str_contains($m?->htmlBody ?? '', 'Åsa &lt;b&gt;Öberg&lt;/b&gt;') && str_contains($m?->htmlBody ?? '', '&lt;script&gt;alert(1)&lt;/script&gt;')
+    && !str_contains($m?->htmlBody ?? '', '<script>') && str_contains($m?->htmlBody ?? '', 'Hej!<br>'));
+
+$t = new FakeMailTransport();
+check('without the honeypot key the submission is accepted', $makeForm($t)->submit(['name' => 'Per', 'email' => 'per@example.com', 'message' => 'Hej då']) && count($t->sent) === 1);
+$t = new FakeMailTransport();
+check('honeypot filled → discarded silently (no mail, no error)', $makeForm($t)->submit(['homepage' => 'http://spam.example'] + $visitor) === false && $t->sent === []);
+check('honeypot as a non-string → 400', $code(fn () => $makeForm(new FakeMailTransport())->submit(['homepage' => ['x']] + $visitor)) === '400 invalid_request');
+check('unknown field (e.g. subject) → 400', $code(fn () => $makeForm(new FakeMailTransport())->submit($visitor + ['subject' => 'Hijack'])) === '400 invalid_request');
+check('unknown field (bcc) → 400', $code(fn () => $makeForm(new FakeMailTransport())->submit($visitor + ['bcc' => 'x@evil.example'])) === '400 invalid_request');
+check('missing field → 400', $code(fn () => $makeForm(new FakeMailTransport())->submit(['name' => 'Per', 'email' => 'per@example.com'])) === '400 invalid_request');
+$t = new FakeMailTransport();
+check('invalid field → no mail', $code(fn () => $makeForm($t)->submit(['email' => "x@example.com\r\nBcc: y@example.com"] + $visitor)) === '400 invalid_email' && $t->sent === []);
+check('transport failure → 503 mail_unavailable (never a success)', $code(fn () => $makeForm(new FakeMailTransport('connect'))->submit($visitor)) === '503 mail_unavailable');
+try {
+    $makeForm(new FakeMailTransport('auth'))->submit($visitor);
+} catch (HttpException $e) {
+    check('failure message is generic (no host, user or PHPMailer text)', !preg_match('/smtp|127\.0\.0\.1|loopia|phpmailer|auth/i', $e->getMessage()), $e->getMessage());
+}
+$logs = readLogs($contactLogs);
+check('log records outcomes and the transport category', str_contains($logs, 'Contact message sent') && str_contains($logs, '"transport":"auth"') && str_contains($logs, 'Contact form submission discarded'));
+check('log never contains the name, address, message or client IP',
+    !str_contains($logs, 'Öberg') && !str_contains($logs, 'asa@example.com') && !str_contains($logs, 'porträttfotografering') && !str_contains($logs, '203.0.113.7'));
+
+echo "\nContact: rate limit (temporary storage, controlled clock)\n";
+
+$limited = $makeForm(new FakeMailTransport(), '198.51.100.9', ['CONTACT_RATE_LIMIT_MAX' => '3', 'CONTACT_RATE_LIMIT_WINDOW' => '900']);
+$results = [];
+for ($i = 0; $i < 4; $i++) {
+    $results[] = $code(fn () => $limited->admit());
+}
+check('3 attempts admitted, the 4th → 429', $results === [null, null, null, '429 too_many_requests'], json_encode($results));
+try {
+    $limited->admit();
+} catch (HttpException $e) {
+    check('Retry-After = rest of the window (900 s)', ($e->headers['Retry-After'] ?? null) === '900', json_encode($e->headers));
+}
+$now += 901;
+check('admitted again after the window', $code(fn () => $limited->admit()) === null);
+$now -= 901;
+
+$loginLimiter = new RateLimiter($contactRoot . '/rate-limit', 5, 900, $contactClock, 0);
+check('contact bucket does not touch the admin-login bucket (same IP)', $loginLimiter->retryAfter('admin-login|198.51.100.9') === null);
+for ($i = 0; $i < 5; $i++) {
+    $loginLimiter->recordFailure('admin-login|203.0.113.50');
+}
+check('a blocked admin login does not block contact (same IP)',
+    $loginLimiter->retryAfter('admin-login|203.0.113.50') !== null && $code(fn () => $makeForm(new FakeMailTransport(), '203.0.113.50')->admit()) === null);
+check('other addresses are unaffected', $code(fn () => $makeForm(new FakeMailTransport(), '198.51.100.10', ['CONTACT_RATE_LIMIT_MAX' => '3'])->admit()) === null);
+
+$corruptKeyFile = $contactRoot . '/rate-limit/' . hash('sha256', ContactForm::RATE_LIMIT_PREFIX . '198.51.100.11') . '.json';
+file_put_contents($corruptKeyFile, '{not json');
+check('corrupt rate-limit file treated as empty', $code(fn () => $makeForm(new FakeMailTransport(), '198.51.100.11')->admit()) === null);
+check('no rate-limit file name contains an address', !preg_grep('/\d+\.\d+\.\d+\.\d+/', scandir($contactRoot . '/rate-limit')));
+
+$serverBefore = $_SERVER;
+$_SERVER['REMOTE_ADDR'] = '192.0.2.1';
+$_SERVER['HTTP_X_FORWARDED_FOR'] = '1.2.3.4';
+$_SERVER['HTTP_X_REAL_IP'] = '5.6.7.8';
+check('client address is REMOTE_ADDR; X-Forwarded-For / X-Real-IP ignored', Http::clientAddress() === '192.0.2.1');
+$_SERVER = $serverBefore;
+
+file_put_contents($contactRoot . '/not-a-dir', 'x');
+$broken = $contactConfig(['STORAGE_DIR' => $contactRoot . '/not-a-dir']);
+try {
+    (new ContactForm($broken, new RateLimiter($broken->rateLimitDir, 5, 900), new FakeMailTransport(), $contactLogger, '192.0.2.2'))->admit();
+    check('unusable rate-limit storage fails closed', false, 'admitted');
+} catch (RateLimitUnavailableException) {
+    check('unusable rate-limit storage fails closed', true);
+}
+
+echo "\nContact: PHPMailer transport\n";
+
+$noVendor = tempDir();
+check('missing vendor/ → clear error, no fatal', (static function () use ($contactConfig, $noVendor): bool {
+    try {
+        PhpMailerTransport::create($contactConfig(), $noVendor);
+        return class_exists(\PHPMailer\PHPMailer\PHPMailer::class, false); // already loaded earlier: fine
+    } catch (RuntimeException $e) {
+        return str_contains($e->getMessage(), 'composer install');
+    }
+})());
+foreach ([
+    'SMTP Error: Could not connect to SMTP host. Failed to connect to server' => 'connect',
+    'SMTP Error: Could not authenticate.' => 'auth',
+    'SMTP Error: The following recipients failed: hej@pixelmani.se' => 'rejected',
+    'SMTP Error: data not accepted.' => 'rejected',
+    'STARTTLS failed: certificate verify failed' => 'tls',
+    'Something else' => 'other',
+] as $error => $category) {
+    check("error category: $category", PhpMailerTransport::category($error) === $category);
+}
+$closed = $contactConfig(['SMTP_PORT' => '9']);
+$started = microtime(true);
+try {
+    PhpMailerTransport::create($closed, dirname(__DIR__))->send($makeForm(new FakeMailTransport())->compose('Per', 'per@example.com', 'Hej'));
+    check('unreachable SMTP server → MailTransportException(connect)', false, 'sent?');
+} catch (MailTransportException $e) {
+    check('unreachable SMTP server → MailTransportException(connect)', $e->category === 'connect', $e->category);
+    check('… with a generic message', !str_contains($e->getMessage(), '127.0.0.1'), $e->getMessage());
+}
+check('… fails fast (under the 15 s timeout)', microtime(true) - $started < 15);
+
+removeTree($contactLogs);
+removeTree($noVendor);
+removeTree($contactRoot);
 
 // ── Database (read-only, real local configuration) ─────────────────────────
 
