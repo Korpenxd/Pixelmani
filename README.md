@@ -22,7 +22,20 @@ NEXT_PUBLIC_SITE_URL=https://pixelmani.se
 SUPABASE_SERVICE_ROLE_KEY=...
 ADMIN_PASSWORD=...
 ADMIN_SESSION_TOKEN=...
+
+# Publika data hämtas från PHP-API:t (php/). Krävs för build och server-
+# rendering; webbläsaren använder alltid relativa /api/...-adresser.
+PIXELMANI_BUILD_API_BASE=http://pixelmani.test/api
 ```
+
+`PIXELMANI_BUILD_API_BASE` pekar på PHP-API:t som bygget hämtar bilder,
+kategorier och landningsbild från. Lokalt är det Laragons
+`http://pixelmani.test/api` (se [`php/README.md`](php/README.md)). Utan den
+avbryts bygget med ett tydligt felmeddelande. Supabase används inte som
+reserv. Så länge sajten körs med Next.js-server vidarebefordras
+`/api/{health,photos,categories,hero,hero-image}` och `/media/*` till samma
+PHP-server (`rewrites()` i `next.config.ts`), så webbläsaren bara pratar med
+sin egen origin. `/api/admin/*` hanteras fortfarande av Next.js.
 
 ## Produktionsdomän och miljöer
 
@@ -63,7 +76,7 @@ Titlar och beskrivningar sätts per sida i `app/page.tsx` respektive `app/showca
 
 ## Innehåll och uppdatering
 
-Start- och galerisidan förrenderas och uppdateras var femte minut (`export const revalidate = 300`), så nya bilder från adminpanelen dyker upp utan ny deploy. En öppen sida uppdateras dessutom direkt via Supabase realtime.
+Start- och galerisidan förrenderas med en ögonblicksbild från PHP-API:t, så att bilderna, alt-texterna och den strukturerade datan finns i HTML:en. Sidorna uppdateras dessutom var femte minut (`export const revalidate = 300`). Efter att sidan laddats hämtar webbläsaren aktuella bilder och kategorier från `/api/photos` och `/api/categories` och gör det igen när fliken blir synlig. Misslyckas hämtningen ligger ögonblicksbilden kvar. Adminpanelen läser och skriver fortfarande mot Supabase tills PHP-adminen är klar.
 
 Fyll i **titel** och **plats** på varje bild i adminpanelen — de används som alt-text, bildtext i lightboxen och i galleriets strukturerade data.
 

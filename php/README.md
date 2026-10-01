@@ -148,8 +148,10 @@ segments), backslashes, absolute paths, schemes or drive letters (any `:`),
 control characters, NUL bytes and invalid UTF-8 are refused. A bad stored path
 is logged and the request fails with a generic 500. It is never turned into a URL.
 
-`/api/hero-image` redirects only to a URL built from `SITE_URL` and the
-validated stored hero path. No request data ever reaches the redirect target.
+`/api/hero-image` redirects with a **root-relative** `Location`
+(`/media/hero/…`) built only from `UPLOAD_URL_BASE` and the validated stored
+hero path. The redirect always stays on the origin that served the request,
+and no request data ever reaches the target.
 
 ### Photo files
 
@@ -175,9 +177,10 @@ manifest checksum. The bundle is not modified, and re-running is safe.
 Blocking script execution inside the upload folder is part of the production
 Apache phase. It is not configured yet.
 
-## Decisions for Phase 5 (frontend switch)
+## Frontend integration (Phase 5A, implemented)
 
-These are decided, not yet implemented.
+The public pages now read from this API through `lib/data/php.ts`. The admin
+still reads Supabase, through `lib/data/admin.ts`.
 
 - **Photo model:** the neutral `Photo` type in `lib/types.ts` gains nullable
   `thumb_path`, `thumb_url`, `width`, `height`, `bytes` and `mime`,

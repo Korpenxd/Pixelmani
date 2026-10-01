@@ -33,7 +33,7 @@ export default function LatestPhotos({ initialPhotos = [] }: { initialPhotos?: P
                 style={{ position: 'relative', aspectRatio: '16 / 9', overflow: 'hidden', border: 'none', padding: 0, cursor: 'pointer', background: '#ccc', display: 'block' }}
               >
                 <Image
-                  src={photo.url}
+                  src={photo.thumb_url ?? photo.url}
                   alt={photoAlt(photo)}
                   fill
                   quality={75}

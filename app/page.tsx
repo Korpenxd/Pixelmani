@@ -11,7 +11,7 @@ import CookieNotice from '@/components/CookieNotice'
 import { pageMetadata } from '@/lib/metadata'
 import { siteConfig } from '@/lib/site'
 import { jsonLdGraph, siteGraph } from '@/lib/structuredData'
-import { getHeroImageUrl, getLatestPhotos } from '@/lib/data'
+import { getHeroImageSrc, getLatestPhotos } from '@/lib/data'
 
 // Photos are added through the admin dashboard, so the prerendered page is
 // refreshed periodically instead of being frozen at build time.
@@ -28,8 +28,11 @@ export const metadata: Metadata = pageMetadata({
 })
 
 export default async function HomePage() {
+  // The hero is referenced through a stable URL (/api/hero-image redirects to
+  // the current file), so the HTML can preload it without knowing which file
+  // is current. It is only rendered when a hero is configured.
   const [heroImageUrl, latestPhotos] = await Promise.all([
-    getHeroImageUrl(),
+    getHeroImageSrc(),
     getLatestPhotos(8),
   ])
 

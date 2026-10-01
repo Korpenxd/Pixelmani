@@ -1,9 +1,15 @@
 import { supabase } from '@/lib/supabase'
-import type { DataSource } from '@/lib/data/types'
+import type { AdminDataSource, PublicDataSource } from '@/lib/data/types'
 import type { Category, Photo, StorageUsage } from '@/lib/types'
 
+/**
+ * Supabase data source. No longer used by the public pages (see
+ * lib/data/php.ts); kept for the admin dashboard until the PHP admin exists,
+ * and as a migration reference.
+ */
+
 /** A row from the photos table, before the public storage URL is resolved. */
-type PhotoRow = Omit<Photo, 'url'>
+type PhotoRow = Omit<Photo, 'url' | 'thumb_path' | 'thumb_url' | 'width' | 'height' | 'bytes' | 'mime'>
 
 /**
  * Resolves the permanent public URL for a stored photo.
@@ -21,6 +27,13 @@ function withPublicUrls(rows: PhotoRow[]): Photo[] {
   return rows.map((row) => ({
     ...row,
     url: getPublicPhotoUrl(row.storage_path),
+    // Not stored in Supabase.
+    thumb_path: null,
+    thumb_url: null,
+    width: null,
+    height: null,
+    bytes: null,
+    mime: null,
   }))
 }
 
@@ -106,27 +119,11 @@ async function getCategories(): Promise<Category[]> {
   return data
 }
 
-function subscribeToPhotoChanges(
-  channelName: string,
-  onChange: () => void
-): () => void {
-  const channel = supabase
-    .channel(channelName)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'photos' }, () => {
-      onChange()
-    })
-    .subscribe()
-
-  return () => { supabase.removeChannel(channel) }
-}
-
-export const supabaseDataSource: DataSource = {
+export const supabaseDataSource: PublicDataSource & AdminDataSource = {
   getPhotos,
   getLatestPhotos,
-  getHeroImagePath,
   getHeroImageUrl,
+  getHeroImageSrc: getHeroImageUrl,
   getCategories,
   getStorageUsage,
-  getPublicPhotoUrl,
-  subscribeToPhotoChanges,
 }

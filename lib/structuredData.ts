@@ -145,7 +145,7 @@ export function showcaseGraph(photos: Photo[], maxImages = 24) {
         ? {
             associatedMedia: photos.slice(0, maxImages).map((photo) => ({
               '@type': 'ImageObject',
-              contentUrl: photo.url,
+              contentUrl: absoluteUrl(photo.url),
               name: photo.title || photoAlt(photo),
               caption: photoAlt(photo),
               creator: { '@id': personId },

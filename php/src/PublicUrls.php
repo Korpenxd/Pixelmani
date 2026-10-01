@@ -39,9 +39,15 @@ final class PublicUrls
 
     public function forStoragePath(string $path): string
     {
+        return $this->siteUrl . $this->pathForStoragePath($path);
+    }
+
+    /** Root-relative URL path, e.g. /media/uploads/<uuid>-name.webp */
+    public function pathForStoragePath(string $path): string
+    {
         $segments = self::validate($path);
 
-        return $this->siteUrl . $this->uploadUrlBase . '/' . implode('/', array_map('rawurlencode', $segments));
+        return $this->uploadUrlBase . '/' . implode('/', array_map('rawurlencode', $segments));
     }
 
     public function forOptionalStoragePath(?string $path): ?string

@@ -4,6 +4,10 @@ const isDev = process.env.NODE_ENV === 'development'
 
 const supabaseUrl = 'https://wzmwzosavyphbxobepfi.supabase.co'
 
+// upgrade-insecure-requests is left out in development only: on plain-http
+// localhost, Chrome upgrades redirect targets (e.g. /api/hero-image →
+// /media/hero/…) to https, which the dev server cannot serve. Production
+// serves https, so the directive stays there unchanged.
 const contentSecurityPolicy = `
   default-src 'self';
   script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''};
@@ -15,7 +19,7 @@ const contentSecurityPolicy = `
   base-uri 'self';
   form-action 'self';
   frame-ancestors 'none';
-  upgrade-insecure-requests;
+  ${isDev ? '' : 'upgrade-insecure-requests;'}
 `
 
 const securityHeaders = [
@@ -48,8 +52,23 @@ const securityHeaders = [
   },
 ]
 
+/**
+ * PHP API used for build-time data (lib/data/php.ts), e.g.
+ * http://pixelmani.test/api locally. Not exposed to the browser.
+ */
+const phpApiBase = process.env.PIXELMANI_BUILD_API_BASE?.trim().replace(/\/+$/, '')
+
+/** The public PHP endpoints the site reads. /api/admin/* stays with Next. */
+const publicApiEndpoints = ['health', 'photos', 'categories', 'hero', 'hero-image']
+
 const nextConfig: NextConfig = {
   images: {
+    // Photos are now served as plain files from /media (PHP/Apache). Next 16
+    // refuses to optimise images from local/private IPs, and the static export
+    // this site is moving to cannot use the optimiser at all. Reversible: remove
+    // this line to restore optimisation. Thumbnails replace the resizing later.
+    unoptimized: true,
+
     remotePatterns: [
       {
         protocol: 'https',
@@ -71,6 +90,28 @@ const nextConfig: NextConfig = {
       {
         source: '/(.*)',
         headers: securityHeaders,
+      },
+    ]
+  },
+
+  // TRANSITIONAL BRIDGE while the site still runs on a Next.js server: the
+  // browser requests /api/<public endpoint> and /media/... on this origin, and
+  // Next forwards them to the PHP backend. In the final static export Apache
+  // serves both directly and this is removed. Explicit paths only: a catch-all
+  // /api rewrite would run before the dynamic /api/admin routes.
+  async rewrites() {
+    if (!phpApiBase) return []
+
+    const phpOrigin = new URL(phpApiBase).origin
+
+    return [
+      ...publicApiEndpoints.map((endpoint) => ({
+        source: `/api/${endpoint}`,
+        destination: `${phpApiBase}/${endpoint}`,
+      })),
+      {
+        source: '/media/:path*',
+        destination: `${phpOrigin}/media/:path*`,
       },
     ]
   },

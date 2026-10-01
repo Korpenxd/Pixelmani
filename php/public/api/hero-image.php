@@ -5,9 +5,10 @@
  * 302 redirect to the current hero image file. Lets static HTML reference a
  * stable URL (and preload it) while the hero can still be changed from admin.
  *
- * The target is built only from SITE_URL and the validated stored hero path,
- * so it can never point to another site. Responds 404 (JSON) when no hero is
- * configured.
+ * The Location is a root-relative path (/media/hero/...) built only from
+ * UPLOAD_URL_BASE and the validated stored hero path, so it always stays on
+ * the origin that served the request and can never point to another site.
+ * Responds 404 (JSON) when no hero is configured.
  */
 
 declare(strict_types=1);
@@ -22,15 +23,16 @@ $app->run(function (App $app): void {
     Http::requireMethod('GET');
     Http::query();
 
-    $url = $app->catalog()->heroUrl();
+    $path = $app->catalog()->heroUrlPath();
 
-    if ($url === null) {
+    if ($path === null) {
         throw new HttpException(404, 'not_found', 'No hero image is configured.');
     }
 
-    if (!str_starts_with($url, $app->config->siteUrl . $app->config->uploadUrlBase . '/')) {
+    // Defence in depth: a single leading slash, inside the upload area.
+    if (!str_starts_with($path, $app->config->uploadUrlBase . '/') || str_starts_with($path, '//')) {
         throw new UnexpectedValueException('Hero redirect target is outside the upload area.');
     }
 
-    Http::redirect($url);
+    Http::redirect($path);
 });

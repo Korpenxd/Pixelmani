@@ -1,22 +1,22 @@
-import { supabaseDataSource } from '@/lib/data/supabase'
-import type { DataSource } from '@/lib/data/types'
+import { phpDataSource } from '@/lib/data/php'
+import type { PublicDataSource } from '@/lib/data/types'
 
 /**
- * The active data source. Supabase is the only implementation for now; a
- * PHP/MySQL implementation will be selectable here later without the rest of
- * the app changing.
+ * The active data source for the public pages: the PHP API.
+ *
+ * The Supabase implementation (lib/data/supabase.ts) satisfies the same
+ * contract and could be switched back in here, but it is deliberately not
+ * imported, so the public bundle carries no Supabase client.
+ * The admin dashboard reads through lib/data/admin.ts instead.
  */
-const dataSource: DataSource = supabaseDataSource
+const publicData: PublicDataSource = phpDataSource
 
 export const {
   getPhotos,
   getLatestPhotos,
-  getHeroImagePath,
-  getHeroImageUrl,
   getCategories,
-  getStorageUsage,
-  getPublicPhotoUrl,
-  subscribeToPhotoChanges,
-} = dataSource
+  getHeroImageUrl,
+  getHeroImageSrc,
+} = publicData
 
-export type { DataSource } from '@/lib/data/types'
+export type { AdminDataSource, PublicDataSource } from '@/lib/data/types'

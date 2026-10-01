@@ -14,6 +14,14 @@ export type Photo = {
   date: string | null
   created_at: string
   is_hero: boolean
+  /** Migration fields. Null until thumbnails/metadata exist (and always from Supabase). */
+  thumb_path: string | null
+  /** Smaller variant for grids and cards; fall back to `url` when null. */
+  thumb_url: string | null
+  width: number | null
+  height: number | null
+  bytes: number | null
+  mime: string | null
 }
 
 export type Category = {

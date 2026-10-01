@@ -1,34 +1,37 @@
 import type { Category, Photo, StorageUsage } from '@/lib/types'
 
 /**
- * Read operations the public site and the admin dashboard need. Each backend
- * (Supabase today) provides one implementation; the rest of the app only
- * talks to this contract through `@/lib/data`.
+ * Read operations behind the public pages. The active implementation is
+ * chosen in lib/data/index.ts; components only talk to this contract.
  */
-export type DataSource = {
+export type PublicDataSource = {
   /** All photos, newest first. */
   getPhotos(): Promise<Photo[]>
 
   /** The newest photos, newest first. */
   getLatestPhotos(limit?: number): Promise<Photo[]>
 
-  /** Stored path of the current landing (hero) image, if one is set. */
-  getHeroImagePath(): Promise<string | null>
-
-  /** Public URL of the current landing (hero) image, if one is set. */
-  getHeroImageUrl(): Promise<string | null>
-
-  /** All categories, sorted by label. */
+  /** Gallery filter categories sorted by label (internal fallback excluded). */
   getCategories(): Promise<Category[]>
 
-  getStorageUsage(): Promise<StorageUsage | null>
-
-  /** Permanent, publicly fetchable URL for a stored photo path. */
-  getPublicPhotoUrl(storagePath: string): string
+  /** URL of the current hero image file, if one is set (sitemap, SEO). */
+  getHeroImageUrl(): Promise<string | null>
 
   /**
-   * Calls `onChange` whenever the photo collection changes. Returns a
-   * function that stops listening.
+   * What the start page uses as the hero `<img src>`, if a hero is set. May
+   * be a stable endpoint rather than the file itself, so the static HTML can
+   * reference (and preload) it without knowing which file is current.
    */
-  subscribeToPhotoChanges(channelName: string, onChange: () => void): () => void
+  getHeroImageSrc(): Promise<string | null>
+}
+
+/**
+ * Reads the current admin dashboard needs. Temporary: served by Supabase
+ * until the PHP admin backend replaces it.
+ */
+export type AdminDataSource = {
+  getPhotos(): Promise<Photo[]>
+  getCategories(): Promise<Category[]>
+  getHeroImageUrl(): Promise<string | null>
+  getStorageUsage(): Promise<StorageUsage | null>
 }

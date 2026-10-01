@@ -1,6 +1,6 @@
 import type { MetadataRoute } from 'next'
 
-import { siteUrl } from '@/lib/site'
+import { absoluteUrl, siteUrl } from '@/lib/site'
 import { getHeroImageUrl, getPhotos } from '@/lib/data'
 
 // Only public, indexable routes belong here — /admin and /api are excluded
@@ -13,7 +13,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     getHeroImageUrl(),
   ])
 
-  const galleryImages = photos.map((photo) => photo.url)
+  // Media URLs are site-relative (/media/...); the sitemap needs absolute ones.
+  const galleryImages = photos.map((photo) => absoluteUrl(photo.url))
 
   const lastModified = photos[0]?.created_at
     ? new Date(photos[0].created_at)
@@ -26,7 +27,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       changeFrequency: 'weekly',
       priority: 1,
       images: [
-        ...(heroImageUrl ? [heroImageUrl] : []),
+        ...(heroImageUrl ? [absoluteUrl(heroImageUrl)] : []),
         ...galleryImages.slice(0, 8),
       ],
     },

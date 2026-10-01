@@ -176,6 +176,7 @@ check('gallery path becomes a URL', $urls->forStoragePath('uploads/abc-kitty.web
 check('hero path becomes a URL', $urls->forStoragePath('hero/x.webp') === 'http://pixelmani.test/media/hero/x.webp');
 check('Swedish characters are percent-encoded per segment', $urls->forStoragePath('uploads/porträtt å.webp') === 'http://pixelmani.test/media/uploads/portr%C3%A4tt%20%C3%A5.webp');
 check('reserved characters are encoded', $urls->forStoragePath('uploads/a#b?c&d.webp') === 'http://pixelmani.test/media/uploads/a%23b%3Fc%26d.webp');
+check('root-relative path for redirects', $urls->pathForStoragePath('hero/x.webp') === '/media/hero/x.webp');
 check('null optional path gives null', $urls->forOptionalStoragePath(null) === null && $urls->forOptionalStoragePath('') === null);
 
 $unsafe = [
@@ -225,7 +226,7 @@ try {
 }
 $memory->exec("INSERT INTO site_settings VALUES ('hero_image_path', 'https://evil.example/x.webp')");
 try {
-    $memoryCatalog->heroUrl();
+    $memoryCatalog->heroUrlPath();
     check('catalog refuses an external hero URL', false, 'accepted');
 } catch (UnsafeStoragePathException) {
     check('catalog refuses an external hero URL', true);

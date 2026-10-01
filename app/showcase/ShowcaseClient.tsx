@@ -12,7 +12,7 @@ import ContactSection from '@/components/ContactSection'
 import Image from 'next/image'
 import Link from 'next/link'
 import { photoAlt } from '@/lib/photoAlt'
-import { useAllPhotos } from '@/hooks/usePhotos'
+import { useAllPhotos, useCategories } from '@/hooks/usePhotos'
 
 function PhotoGrid({
   photos,
@@ -98,7 +98,7 @@ function PhotoGrid({
                 }}
               >
                 <Image
-                  src={photo.url}
+                  src={photo.thumb_url ?? photo.url}
                   alt={photoAlt(photo)}
                   fill
                   quality={75}
@@ -160,13 +160,14 @@ export default function ShowcaseClient({
     useState('all')
 
   const { photos, loading } = useAllPhotos(initialPhotos)
+  const { categories } = useCategories(initialCategories)
 
   const displayCategories = [
     {
       key: 'all',
       label: 'Alla',
     },
-    ...initialCategories,
+    ...categories,
   ]
 
   // Every photo is already loaded, so switching category is instant and all

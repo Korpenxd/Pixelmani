@@ -1,13 +1,11 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import {
-  getPhotos,
-  getStorageUsage,
-  getCategories,
-  getHeroImageUrl,
-} from '@/lib/data'
+import { adminData } from '@/lib/data/admin'
 import type { Category, Photo, StorageUsage } from '@/lib/types'
+
+// The admin still reads Supabase until the PHP admin backend exists.
+const { getPhotos, getStorageUsage, getCategories, getHeroImageUrl } = adminData
 import { useRouter } from 'next/navigation'
 import Navbar from '@/components/Navbar'
 import { compressImage } from '@/lib/compressImage'

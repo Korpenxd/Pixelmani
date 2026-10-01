@@ -1,48 +1,71 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { getLatestPhotos, getPhotos, subscribeToPhotoChanges } from '@/lib/data'
-import type { Photo } from '@/lib/types'
+import { getCategories, getLatestPhotos, getPhotos } from '@/lib/data'
+import type { Category, Photo } from '@/lib/types'
 
 /**
- * Both hooks accept photos that were already fetched on the server, so the
- * gallery is part of the HTML that crawlers see and the browser does not have
- * to refetch the same rows on mount. The realtime subscription still keeps an
- * open page in sync when photos are added from the admin dashboard.
+ * Build-time snapshot + client refresh.
+ *
+ * Each hook starts from data rendered at build time (so the gallery is in the
+ * HTML that crawlers see), then fetches fresh data from the API once after
+ * hydration and again whenever the tab becomes visible. The snapshot is only
+ * replaced when the data actually differs, and a failed refresh keeps
+ * whatever is already shown.
  */
-
-export function useLatestPhotos(limit = 8, initialPhotos: Photo[] = []) {
-  const [photos, setPhotos] = useState<Photo[]>(initialPhotos)
-  const [loading, setLoading] = useState(initialPhotos.length === 0)
-  const hasServerPhotos = initialPhotos.length > 0
+function useRefreshed<T>(initial: T[], load: () => Promise<T[]>, deps: unknown[]) {
+  const [items, setItems] = useState<T[]>(initial)
+  const [loading, setLoading] = useState(initial.length === 0)
 
   useEffect(() => {
-    if (!hasServerPhotos) {
-      getLatestPhotos(limit).then((data) => { setPhotos(data); setLoading(false) })
+    let cancelled = false
+
+    const refresh = () => {
+      load()
+        .then((fresh) => {
+          if (cancelled) return
+          setItems((current) =>
+            JSON.stringify(current) === JSON.stringify(fresh) ? current : fresh
+          )
+        })
+        .catch((error: unknown) => {
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn('Could not refresh gallery data; keeping the current content.', error)
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
     }
 
-    return subscribeToPhotoChanges('photos-latest', () => {
-      getLatestPhotos(limit).then(setPhotos)
-    })
-  }, [limit, hasServerPhotos])
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
 
-  return { photos, loading }
+    refresh()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+
+  return { items, loading }
+}
+
+export function useLatestPhotos(limit = 8, initialPhotos: Photo[] = []) {
+  const { items, loading } = useRefreshed(initialPhotos, () => getLatestPhotos(limit), [limit])
+  return { photos: items, loading }
 }
 
 export function useAllPhotos(initialPhotos: Photo[] = []) {
-  const [photos, setPhotos] = useState<Photo[]>(initialPhotos)
-  const [loading, setLoading] = useState(initialPhotos.length === 0)
-  const hasServerPhotos = initialPhotos.length > 0
+  const { items, loading } = useRefreshed(initialPhotos, getPhotos, [])
+  return { photos: items, loading }
+}
 
-  useEffect(() => {
-    if (!hasServerPhotos) {
-      getPhotos().then((data) => { setPhotos(data); setLoading(false) })
-    }
-
-    return subscribeToPhotoChanges('photos-all', () => {
-      getPhotos().then(setPhotos)
-    })
-  }, [hasServerPhotos])
-
-  return { photos, loading }
+export function useCategories(initialCategories: Category[] = []) {
+  const { items } = useRefreshed(initialCategories, getCategories, [])
+  return { categories: items }
 }

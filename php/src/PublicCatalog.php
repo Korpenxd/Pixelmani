@@ -75,6 +75,14 @@ final class PublicCatalog
         return $this->urls->forOptionalStoragePath($this->heroPath());
     }
 
+    /** Root-relative path of the hero file, or null if none is configured. */
+    public function heroUrlPath(): ?string
+    {
+        $path = $this->heroPath();
+
+        return $path === null ? null : $this->urls->pathForStoragePath($path);
+    }
+
     private function presentPhoto(array $row): array
     {
         return [
