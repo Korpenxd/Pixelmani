@@ -12,12 +12,25 @@ final class App
         public readonly Logger $logger,
         public readonly Database $db,
         private readonly ErrorHandler $errors,
+        public readonly string $appRoot,
     ) {}
+
+    private ?AdminAuth $adminAuth = null;
 
     /** Read-only queries for the public API (connects on first use). */
     public function catalog(): PublicCatalog
     {
         return new PublicCatalog($this->db->pdo(), PublicUrls::fromConfig($this->config));
+    }
+
+    /**
+     * Admin authentication. Only admin endpoints call this: creating it does
+     * not start a session, and public endpoints never touch it, so they never
+     * set a cookie. Invalid admin settings fail here (500), not in bootstrap.
+     */
+    public function adminAuth(): AdminAuth
+    {
+        return $this->adminAuth ??= AdminAuth::create($this->config, $this->logger, $this->appRoot);
     }
 
     /**

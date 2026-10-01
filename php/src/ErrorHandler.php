@@ -68,6 +68,7 @@ final class ErrorHandler
         [$status, $code, $message] = match (true) {
             $e instanceof ConfigException => [500, 'configuration_error', 'The service is not configured correctly.'],
             $e instanceof DatabaseUnavailableException => [503, 'service_unavailable', 'The service is temporarily unavailable.'],
+            $e instanceof RateLimitUnavailableException => [503, 'service_unavailable', 'The service is temporarily unavailable.'],
             default => [500, 'internal_error', 'An unexpected error occurred.'],
         };
 

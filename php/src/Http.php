@@ -76,6 +76,84 @@ final class Http
     }
 
     /**
+     * Same-origin policy for state-changing requests. The expected origin is
+     * SITE_URL's scheme://host[:port]; forwarded headers are never trusted.
+     *
+     * - Origin header present: it must equal the expected origin ("null" and
+     *   anything else → 403).
+     * - No Origin, but Sec-Fetch-Site present: must be "same-origin" or "none".
+     * - Neither header: allowed. Browsers send Origin on every POST, so this
+     *   is a non-browser client (curl, scripts). Such a request still needs a
+     *   valid session cookie and CSRF token for any authenticated mutation,
+     *   which a cross-site attacker cannot supply.
+     */
+    public static function requireSameOrigin(string $siteUrl): void
+    {
+        $expected = self::origin($siteUrl);
+        $origin = $_SERVER['HTTP_ORIGIN'] ?? null;
+
+        if (is_string($origin)) {
+            if ($expected === null || self::origin($origin) !== $expected) {
+                throw new HttpException(403, 'forbidden_origin', 'Cross-origin requests are not allowed.');
+            }
+            return;
+        }
+
+        $fetchSite = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? null;
+        if (is_string($fetchSite) && !in_array(strtolower($fetchSite), ['same-origin', 'none'], true)) {
+            throw new HttpException(403, 'forbidden_origin', 'Cross-origin requests are not allowed.');
+        }
+    }
+
+    /** "scheme://host[:port]" in lower case, default ports omitted; null if not an http(s) origin. */
+    public static function origin(string $url): ?string
+    {
+        $parts = parse_url(trim($url));
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = strtolower((string) ($parts['host'] ?? ''));
+
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '' || isset($parts['user']) || isset($parts['pass'])) {
+            return null;
+        }
+
+        $port = $parts['port'] ?? null;
+        $defaultPort = $scheme === 'https' ? 443 : 80;
+
+        return $scheme . '://' . $host . ($port !== null && $port !== $defaultPort ? ':' . $port : '');
+    }
+
+    /**
+     * Reads a JSON object request body (Content-Type: application/json, at
+     * most $maxBytes). Anything else is a 400. The body is never logged.
+     *
+     * @return array<string, mixed>
+     */
+    public static function jsonBody(int $maxBytes): array
+    {
+        $contentType = strtolower(trim(explode(';', (string) ($_SERVER['CONTENT_TYPE'] ?? ''))[0]));
+        if ($contentType !== 'application/json') {
+            throw new HttpException(400, 'invalid_request', 'The request body must be JSON (Content-Type: application/json).');
+        }
+
+        $body = file_get_contents('php://input', false, null, 0, $maxBytes + 1);
+        if ($body === false || $body === '' || strlen($body) > $maxBytes) {
+            throw new HttpException(400, 'invalid_request', 'The request body is missing or too large.');
+        }
+
+        try {
+            $data = json_decode($body, true, 8, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            throw new HttpException(400, 'invalid_request', 'The request body is not valid JSON.');
+        }
+
+        if (!is_array($data) || ($data !== [] && array_is_list($data))) {
+            throw new HttpException(400, 'invalid_request', 'The request body must be a JSON object.');
+        }
+
+        return $data;
+    }
+
+    /**
      * Sends a 302 to a URL the application built itself. Never pass request
      * data here: the target must come from configuration and validated
      * stored values only.

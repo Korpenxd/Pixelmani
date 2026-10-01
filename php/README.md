@@ -6,7 +6,9 @@ current Next.js/Supabase site and is not used by it yet.
 
 So far it provides the foundation (configuration, database connection, JSON
 responses, method checks, error handling, logging, health check) and the
-public read-only API. There are no admin, upload or contact endpoints yet.
+public read-only API, and the admin authentication foundation (login,
+session, logout). There are no upload, edit or contact endpoints yet. The
+live admin still uses the Next.js login; these endpoints exist alongside it.
 
 ## Layout
 
@@ -24,8 +26,13 @@ php/
     api/categories.php   GET /api/categories
     api/hero.php         GET /api/hero
     api/hero-image.php   GET /api/hero-image (302 to the hero file)
+    api/admin/login.php    POST /api/admin/login
+    api/admin/session.php  GET  /api/admin/session
+    api/admin/logout.php   POST /api/admin/logout
     media/               local runtime copies of photo files (gitignored)
   storage/logs/          default log directory (gitignored)
+  storage/sessions/      admin PHP sessions (gitignored)
+  storage/rate-limit/    login rate-limit state (gitignored)
   tests/smoke.php        local smoke tests
   dev/apache-vhost.local.conf   Laragon vhost (local development only)
 ```
@@ -45,6 +52,12 @@ layout keeps them outside it.
 | `DB_PORT` | no | Integer 1–65535, default `3306` |
 | `DB_CHARSET` | no | Must be `utf8mb4` (default) |
 | `LOG_DIR` | no | Default `php/storage/logs`. Must not be web-accessible. |
+| `STORAGE_DIR` | no | Default `php/storage`. Holds `sessions/` and `rate-limit/`. Writable, not web-accessible. |
+| `ADMIN_PASSWORD_HASH` | admin only | Output of `password_hash()`. Never a plaintext password. |
+| `SESSION_NAME` | no | Default `pixelmani_admin` |
+| `SESSION_IDLE_SECONDS` | no | Default `1800` (60–86400) |
+| `COOKIE_SECURE` | no | Default `true`, or `false` with `APP_ENV=local`. `false` is refused outside local. |
+| `LOGIN_RATE_LIMIT_MAX` / `LOGIN_RATE_LIMIT_WINDOW` | no | Default 5 failed logins per 900 s per IP |
 | `UPLOAD_URL_BASE` | no | Same-origin URL path for photo files, default `/media`. No scheme or host. |
 
 Sources, highest precedence first:
@@ -200,6 +213,78 @@ still reads Supabase, through `lib/data/admin.ts`.
   current file) as a stable URL in the static HTML, so it can keep its preload
   and its LCP behaviour while the hero can still be changed from admin.
 
+## Admin authentication
+
+One admin, identified by `ADMIN_PASSWORD_HASH`. Admin settings are only
+validated when an admin endpoint runs. A missing or broken admin setting never
+affects the public API.
+
+| Endpoint | Success | Errors |
+| --- | --- | --- |
+| `POST /api/admin/login` with `{"password": "…"}` (JSON, at most 1024 bytes) | `{authenticated: true, csrfToken}` and a session cookie | 400 `invalid_request`, 401 `invalid_credentials`, 403 `forbidden_origin`, 429 `too_many_attempts` with `Retry-After` |
+| `GET /api/admin/session` | `{authenticated: false}` or `{authenticated: true, csrfToken}` | — |
+| `POST /api/admin/logout` with `X-CSRF-Token` | `{authenticated: false}`, cookie expired | 401 `not_authenticated`, 403 `csrf_failed` / `forbidden_origin` |
+
+### Future admin endpoints
+
+Use these helpers instead of handling auth yourself:
+
+```php
+$app->adminAuth()->requireAdmin();          // read-only admin data
+$app->adminAuth()->requireAdminMutation();  // every state-changing request
+```
+
+- `requireAdmin()` needs an authenticated session within the idle timeout
+  (otherwise 401). It destroys expired sessions and refreshes the idle timer.
+- `requireAdminMutation()` adds the same-origin check and the
+  `X-CSRF-Token` header check, compared with `hash_equals` against this
+  session's token (otherwise 403).
+
+### How it works
+
+- **Password:** `password_verify()` against `ADMIN_PASSWORD_HASH`. A wrong
+  password, a missing hash and an invalid hash all give the same
+  `401 invalid_credentials`. Verification still runs against a dummy hash, so
+  the timing matches too. Request bodies and passwords are never logged.
+- **Session:** a normal PHP session, created only by a successful login.
+  The cookie is `pixelmani_admin`, a browser-session cookie (no "remember
+  me"), with `HttpOnly`, `SameSite=Strict` and `Path=/`. It is `Secure`
+  unless `APP_ENV=local`. Strict mode is on: session IDs a client invents are
+  never adopted. The session ID is only accepted from the cookie, never from
+  the URL or other headers.
+- **Fixation:** login always calls `session_regenerate_id(true)`. The new ID
+  replaces whatever ID the client had, the old session storage is deleted, and
+  a new CSRF token is issued.
+- **Idle timeout:** enforced on the server on every check. After
+  `SESSION_IDLE_SECONDS` without activity the session is destroyed, its cookie
+  expired and its CSRF token is dead. Session files live in
+  `STORAGE_DIR/sessions` and `gc_maxlifetime` is raised to cover the timeout,
+  so another site's session cleanup on shared hosting cannot cut sessions short.
+- **CSRF:** 32 random bytes (64 hex characters) per session, sent in the
+  `X-CSRF-Token` header. Never accepted from the URL: unknown query
+  parameters are rejected anyway.
+- **Origin policy** for login and every mutation. The expected origin is
+  `SITE_URL`'s `scheme://host[:port]`, and forwarded headers are never trusted.
+  - An `Origin` header must match exactly. `null` or any other origin gives 403.
+  - With no `Origin`, a `Sec-Fetch-Site` header must be `same-origin` or `none`.
+  - With neither header the request is allowed. Browsers always send `Origin`
+    on POST, so this is a non-browser client such as curl. It still needs a
+    valid session cookie and CSRF token for any mutation.
+- **Login rate limit:** a sliding window per `REMOTE_ADDR` (proxy headers are
+  ignored, as there is no trusted proxy). After 5 failures in 900 s you get 429
+  with `Retry-After`, even with the right password. A successful login clears
+  the counter. State is kept in `STORAGE_DIR/rate-limit/`, one locked JSON file
+  per client, named by a SHA-256 hash. Corrupt files count as empty, stale files
+  are cleaned up opportunistically, and no cron is needed. If the directory is
+  unusable, login fails closed with 503.
+- **Logs:** auth events record a short hashed client reference, never the raw
+  IP address, password or hash.
+- **No cookies on the public site:** nothing outside `api/admin/*` creates
+  `AdminAuth`, and bootstrap never starts a session. This is tested for every
+  public endpoint.
+
+To lift a local lockout, delete the files in `php/storage/rate-limit/`.
+
 ## Logging
 
 Files are named `app-YYYY-MM-DD.log`, one line per entry, with UTC timestamps
@@ -232,8 +317,8 @@ administrative task done with a different account.
 `/api/health?diagnostics=1` adds PHP and database version details. It is only
 available when `APP_ENV=local` **and** the request comes from `127.0.0.1` or `::1`.
 
-The `/api/<name>` → `<name>.php` rewrite in the vhost is for local development
-only. Production Apache rules are written in a later phase.
+The `/api/<name>` and `/api/admin/<name>` → `<name>.php` rewrite in the
+vhost is for local development only. Reload Apache in Laragon after changing it. Production Apache rules are written in a later phase.
 
 ## Tests
 

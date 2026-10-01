@@ -5,3 +5,9 @@
 
 # Local runtime copies of photo files (see db/tools/copy-bundle-files.php)
 /public/media/
+
+# Admin sessions and login rate-limit state (never committed, never served)
+/storage/sessions/*
+!/storage/sessions/.gitkeep
+/storage/rate-limit/*
+!/storage/rate-limit/.gitkeep

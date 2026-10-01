@@ -23,7 +23,18 @@ final class Config
     public const KEYS = [
         'APP_ENV', 'SITE_URL',
         'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_CHARSET',
-        'LOG_DIR', 'UPLOAD_URL_BASE',
+        'LOG_DIR', 'UPLOAD_URL_BASE', 'STORAGE_DIR',
+        ...self::ADMIN_KEYS,
+    ];
+
+    /**
+     * Admin-only settings. They are carried unvalidated and only checked by
+     * AdminConfig when an admin endpoint runs, so a missing or broken admin
+     * setting can never take the public API down.
+     */
+    public const ADMIN_KEYS = [
+        'ADMIN_PASSWORD_HASH', 'SESSION_NAME', 'SESSION_IDLE_SECONDS', 'COOKIE_SECURE',
+        'LOGIN_RATE_LIMIT_MAX', 'LOGIN_RATE_LIMIT_WINDOW',
     ];
 
     /** URL path under which stored photo files are served, on the same origin. */
@@ -42,7 +53,16 @@ final class Config
         public readonly string $dbCharset,
         public readonly ?string $logDir,
         public readonly string $uploadUrlBase,
+        public readonly ?string $storageDir,
+        /** @var array<string, ?string> raw admin settings, see ADMIN_KEYS */
+        #[\SensitiveParameter] private readonly array $adminSettings = [],
     ) {}
+
+    /** Raw admin setting (trimmed), or null when not set. Validated by AdminConfig. */
+    public function adminSetting(string $key): ?string
+    {
+        return $this->adminSettings[$key] ?? null;
+    }
 
     public function isLocal(): bool
     {
@@ -189,6 +209,11 @@ final class Config
             dbCharset: $dbCharset,
             logDir: $logDir === '' ? null : $logDir,
             uploadUrlBase: $uploadUrlBase,
+            storageDir: ($storageDir = $get('STORAGE_DIR')) === '' ? null : $storageDir,
+            adminSettings: array_combine(
+                self::ADMIN_KEYS,
+                array_map(static fn (string $key): ?string => is_scalar($raw[$key] ?? null) ? trim((string) $raw[$key]) : null, self::ADMIN_KEYS)
+            ),
         );
     }
 

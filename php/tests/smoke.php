@@ -18,7 +18,12 @@ require_once __DIR__ . '/../src/JsonResponse.php';
 require_once __DIR__ . '/../src/Database.php';
 require_once __DIR__ . '/../src/PublicUrls.php';
 require_once __DIR__ . '/../src/PublicCatalog.php';
+require_once __DIR__ . '/../src/AdminConfig.php';
+require_once __DIR__ . '/../src/RateLimiter.php';
 
+use PixelMani\AdminConfig;
+use PixelMani\RateLimiter;
+use PixelMani\RateLimitUnavailableException;
 use PixelMani\Config;
 use PixelMani\ConfigException;
 use PixelMani\Database;
@@ -324,6 +329,267 @@ check('unavailable log directory still yields clean JSON', str_starts_with($out,
 
 removeDir($logDir);
 removeDir($configDir);
+
+// ── Admin authentication ────────────────────────────────────────────────────
+
+echo "\nAdmin configuration\n";
+
+$adminConfigFor = static fn (array $overrides = []): AdminConfig => AdminConfig::fromConfig(Config::fromArray(validConfig($overrides)), dirname(__DIR__));
+$adminError = static function (array $overrides) use ($adminConfigFor): ?string {
+    try {
+        $adminConfigFor($overrides);
+        return null;
+    } catch (ConfigException $e) {
+        return $e->getMessage();
+    }
+};
+$testHash = password_hash('correct horse battery', PASSWORD_DEFAULT);
+$prod = ['APP_ENV' => 'production', 'SITE_URL' => 'https://example.com'];
+
+$defaults = $adminConfigFor();
+check('admin defaults: session name, 1800 s idle, 5 attempts / 900 s',
+    $defaults->sessionName === 'pixelmani_admin' && $defaults->idleSeconds === 1800 && $defaults->rateLimitMax === 5 && $defaults->rateLimitWindow === 900);
+check('local: cookies not Secure by default', $defaults->cookieSecure === false);
+check('production: cookies Secure by default', $adminConfigFor($prod)->cookieSecure === true);
+check('staging: cookies Secure by default', $adminConfigFor(['APP_ENV' => 'staging', 'SITE_URL' => 'https://s.example.com'])->cookieSecure === true);
+check('COOKIE_SECURE=false rejected outside local', $adminError($prod + ['COOKIE_SECURE' => 'false']) !== null);
+check('COOKIE_SECURE=true allowed locally', $adminConfigFor(['COOKIE_SECURE' => 'true'])->cookieSecure === true);
+check('COOKIE_SECURE garbage rejected', $adminError(['COOKIE_SECURE' => 'maybe']) !== null);
+foreach (['1', 'abc', '59', '86401', '-5'] as $v) {
+    check("SESSION_IDLE_SECONDS '$v' rejected", $adminError(['SESSION_IDLE_SECONDS' => $v]) !== null);
+}
+foreach (['1abc', 'with space', 'a-b', str_repeat('a', 65)] as $v) {
+    check("SESSION_NAME '" . substr($v, 0, 12) . "' rejected", $adminError(['SESSION_NAME' => $v]) !== null);
+}
+check('LOGIN_RATE_LIMIT_MAX 0 rejected', $adminError(['LOGIN_RATE_LIMIT_MAX' => '0']) !== null);
+check('LOGIN_RATE_LIMIT_WINDOW 10 rejected', $adminError(['LOGIN_RATE_LIMIT_WINDOW' => '10']) !== null);
+check('missing ADMIN_PASSWORD_HASH → no usable hash (not a config error)', $adminConfigFor()->passwordHash() === null);
+check('non-hash ADMIN_PASSWORD_HASH → no usable hash', $adminConfigFor(['ADMIN_PASSWORD_HASH' => 'plaintext-password'])->passwordHash() === null);
+check('valid ADMIN_PASSWORD_HASH kept', $adminConfigFor(['ADMIN_PASSWORD_HASH' => $testHash])->passwordHash() === $testHash);
+ob_start();
+var_dump($adminConfigFor(['ADMIN_PASSWORD_HASH' => $testHash]));
+print_r(Config::fromArray(validConfig(['ADMIN_PASSWORD_HASH' => $testHash])));
+$dump = ob_get_clean();
+check('var_dump/print_r never show the hash', !str_contains($dump, substr($testHash, 7)));
+check('storage defaults to php/storage', str_ends_with(str_replace('\\', '/', $defaults->sessionDir), 'php/storage/sessions'));
+
+echo "\nRate limiter (temporary storage, controlled clock)\n";
+
+$rlDir = tempDir();
+$now = 1_000_000;
+$clock = static function () use (&$now): int { return $now; };
+$limiter = new RateLimiter($rlDir, 5, 900, $clock, 0);
+
+check('fresh key is not blocked', $limiter->retryAfter('ip-a') === null);
+$counts = [];
+for ($i = 0; $i < 5; $i++) {
+    $counts[] = $limiter->recordFailure('ip-a');
+    $now += 10;
+}
+check('failures increment 1..5', $counts === [1, 2, 3, 4, 5]);
+$retry = $limiter->retryAfter('ip-a');
+check('5 failures block the key', $retry !== null);
+check('Retry-After = until the first failure leaves the window', $retry === 900 - 50, (string) $retry);
+check('other keys are unaffected', $limiter->retryAfter('ip-b') === null);
+$now += 851;
+check('block lifts when the window slides past', $limiter->retryAfter('ip-a') === null);
+$limiter->recordFailure('ip-a');
+check('one new failure inside the window re-blocks (4 old + 1 new)', $limiter->retryAfter('ip-a') !== null);
+$limiter->reset('ip-a');
+check('reset (successful login) clears the key', $limiter->retryAfter('ip-a') === null);
+
+file_put_contents($rlDir . '/' . hash('sha256', 'ip-c') . '.json', '{corrupt');
+check('corrupt entry is treated as empty', $limiter->retryAfter('ip-c') === null && $limiter->recordFailure('ip-c') === 1);
+check('files are named by hash, no raw key', !glob($rlDir . '/*ip-*') && count(glob($rlDir . '/*.json')) >= 1);
+check('stored entry contains no key', !str_contains(implode('', array_map('file_get_contents', glob($rlDir . '/*.json'))), 'ip-'));
+
+$stale = $rlDir . '/' . str_repeat('a', 64) . '.json';
+file_put_contents($stale, '{"failures":[1]}');
+touch($stale, time() - 100_000);
+(new RateLimiter($rlDir, 5, 900, null, 1))->retryAfter('ip-d');
+check('stale entries are cleaned up opportunistically', !is_file($stale));
+
+$notADir = $rlDir . '/plain-file';
+file_put_contents($notADir, 'x');
+try {
+    (new RateLimiter($notADir, 5, 900))->recordFailure('ip-e');
+    check('unusable storage fails closed', false, 'no exception');
+} catch (RateLimitUnavailableException) {
+    check('unusable storage fails closed', true);
+}
+foreach (glob($rlDir . '/*') ?: [] as $file) {
+    @unlink($file);
+}
+@rmdir($rlDir);
+
+echo "\nAdmin sessions, CSRF and origin (separate processes)\n";
+
+/** Recursively removes a temporary directory. */
+function removeTree(string $dir): void
+{
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST) as $item) {
+        $item->isDir() ? @rmdir($item->getPathname()) : @unlink($item->getPathname());
+    }
+    @rmdir($dir);
+}
+
+/**
+ * Runs PHP code in a fresh process after the real bootstrap, with an admin
+ * session whose clock is TEST_NOW. The code sees $app, $auth, $session and
+ * sets $result. Returns ['result' => …, 'session_status' => …].
+ */
+function adminScript(string $code, array $env, array $server = [], array $cookies = []): mixed
+{
+    $file = tempnam(sys_get_temp_dir(), 'pma') . '.php';
+    $prelude = '$_SERVER = array_merge($_SERVER, ' . var_export($server + ['REQUEST_METHOD' => 'POST', 'REMOTE_ADDR' => '127.0.0.1'], true) . ');'
+        . '$_COOKIE = ' . var_export($cookies, true) . ';'
+        . '$app = require ' . var_export(realpath(BOOTSTRAP), true) . ';'
+        . '$adminConfig = PixelMani\AdminConfig::fromConfig($app->config, $app->appRoot);'
+        . '$now = (int) getenv("TEST_NOW");'
+        . '$session = new PixelMani\AdminSession($adminConfig, $app->logger, fn () => $now);'
+        . '$auth = new PixelMani\AdminAuth($app->config, $adminConfig, $session, new PixelMani\RateLimiter($adminConfig->rateLimitDir, 5, 900, fn () => $now, 0), $app->logger);'
+        . '$result = null;'
+        . 'try { ' . $code . ' } catch (PixelMani\HttpException $e) { $result = ["http" => $e->status, "code" => $e->errorCode]; }'
+        . 'echo "\n@@RESULT@@" . json_encode(["result" => $result, "session_status" => session_status()]);';
+    file_put_contents($file, "<?php\n" . $prelude);
+    $process = proc_open([PHP_BINARY, $file], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, array_merge(getenv(), $env));
+    $out = stream_get_contents($pipes[1]);
+    stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    proc_close($process);
+    @unlink($file);
+    $marker = strrpos($out, '@@RESULT@@');
+    return $marker === false ? ['raw' => substr($out, 0, 300)] : json_decode(substr($out, $marker + 10), true);
+}
+
+$storage = tempDir();
+$authEnv = ['APP_ENV' => 'local', 'STORAGE_DIR' => $storage, 'LOG_DIR' => $storage . '/logs', 'ADMIN_PASSWORD_HASH' => $testHash, 'TEST_NOW' => '2000000'];
+$sessFile = static fn (string $id): string => $storage . '/sessions/sess_' . $id;
+$cookieName = 'pixelmani_admin';
+$sameOrigin = ['HTTP_ORIGIN' => 'http://pixelmani.test'];
+
+// Wrong / missing-hash passwords: one generic failure, no session.
+$r = adminScript('$auth->login("wrong");', $authEnv, $sameOrigin);
+check('wrong password → 401 invalid_credentials', ($r['result'] ?? null) === ['http' => 401, 'code' => 'invalid_credentials'], json_encode($r));
+check('failed login starts no session', ($r['session_status'] ?? null) === PHP_SESSION_NONE);
+$r = adminScript('$auth->login("correct horse battery");', ['ADMIN_PASSWORD_HASH' => ''] + $authEnv, $sameOrigin);
+check('missing hash looks exactly like a wrong password', ($r['result'] ?? null) === ['http' => 401, 'code' => 'invalid_credentials']);
+$r = adminScript('$auth->login("correct horse battery");', ['ADMIN_PASSWORD_HASH' => 'not-a-hash'] + $authEnv, $sameOrigin);
+check('invalid hash looks exactly like a wrong password', ($r['result'] ?? null) === ['http' => 401, 'code' => 'invalid_credentials']);
+
+// Fixation: an anonymous session that becomes authenticated gets a new ID.
+$r = adminScript('
+    (new ReflectionMethod($session, "open"))->invoke($session);
+    $_SESSION["probe"] = 1;
+    session_write_close();
+    session_start();
+    $before = session_id();
+    $csrf = $auth->login("correct horse battery");
+    $result = ["before" => $before, "after" => session_id(), "csrf" => $csrf, "cookie" => session_get_cookie_params()];
+', $authEnv, $sameOrigin);
+$login = $r['result'] ?? [];
+check('correct password logs in', isset($login['after']) && $login['after'] !== '', json_encode($r));
+check('session ID changes on login (anonymous → authenticated)', isset($login['before'], $login['after']) && $login['before'] !== $login['after']);
+check('pre-login session storage is deleted', isset($login['before']) && !is_file($sessFile($login['before'])));
+check('CSRF token is 64 hex chars', (bool) preg_match('/^[0-9a-f]{64}$/', $login['csrf'] ?? ''));
+check('cookie: HttpOnly, SameSite=Strict, path /, session lifetime',
+    ($login['cookie']['httponly'] ?? null) === true && ($login['cookie']['samesite'] ?? null) === 'Strict'
+    && ($login['cookie']['path'] ?? null) === '/' && ($login['cookie']['lifetime'] ?? null) === 0);
+check('cookie: not Secure with APP_ENV=local', ($login['cookie']['secure'] ?? null) === false);
+$sid = $login['after'] ?? 'missing';
+$csrf = $login['csrf'] ?? 'missing';
+$cookie = [$cookieName => $sid];
+
+// A planted (unknown) ID is never adopted.
+$r = adminScript('$result = $auth->currentAdmin();', $authEnv, [], [$cookieName => 'plantedbyattacker0123456789']);
+check('planted unknown session ID is not authenticated', array_key_exists('result', $r) && $r['result'] === null);
+check('planted ID creates no session file', !is_file($sessFile('plantedbyattacker0123456789')));
+
+// requireAdmin / idle timeout with a controlled clock (idle = 1800 s).
+$r = adminScript('$result = $auth->requireAdmin()["csrf"];', ['TEST_NOW' => (string) (2_000_000 + 1799)] + $authEnv, [], $cookie);
+check('requireAdmin passes before the idle timeout', ($r['result'] ?? null) === $csrf);
+$r = adminScript('$result = $auth->requireAdmin()["last_activity"];', ['TEST_NOW' => (string) (2_000_000 + 1799 + 1000)] + $authEnv, [], $cookie);
+check('activity refreshes the idle timer', ($r['result'] ?? null) === 2_000_000 + 1799 + 1000);
+
+// CSRF and origin for mutations.
+$mutation = '$result = $auth->requireAdminMutation()["csrf"] === ' . var_export($csrf, true) . ';';
+$t = ['TEST_NOW' => (string) (2_000_000 + 3000)] + $authEnv;
+$r = adminScript($mutation, $t, $sameOrigin, $cookie);
+check('mutation without CSRF header → 403 csrf_failed', ($r['result'] ?? null) === ['http' => 403, 'code' => 'csrf_failed']);
+$r = adminScript($mutation, $t, $sameOrigin + ['HTTP_X_CSRF_TOKEN' => str_repeat('0', 64)], $cookie);
+check('mutation with wrong CSRF → 403 csrf_failed', ($r['result'] ?? null) === ['http' => 403, 'code' => 'csrf_failed']);
+$r = adminScript($mutation, $t, ['HTTP_ORIGIN' => 'https://evil.example', 'HTTP_X_CSRF_TOKEN' => $csrf], $cookie);
+check('mutation from a foreign Origin → 403 forbidden_origin', ($r['result'] ?? null) === ['http' => 403, 'code' => 'forbidden_origin']);
+$r = adminScript($mutation, $t, ['HTTP_ORIGIN' => 'null', 'HTTP_X_CSRF_TOKEN' => $csrf], $cookie);
+check('Origin "null" → 403', ($r['result'] ?? null) === ['http' => 403, 'code' => 'forbidden_origin']);
+$r = adminScript($mutation, $t, ['HTTP_SEC_FETCH_SITE' => 'cross-site', 'HTTP_X_CSRF_TOKEN' => $csrf], $cookie);
+check('no Origin but Sec-Fetch-Site: cross-site → 403', ($r['result'] ?? null) === ['http' => 403, 'code' => 'forbidden_origin']);
+$r = adminScript($mutation, $t, ['HTTP_X_FORWARDED_HOST' => 'pixelmani.test', 'HTTP_ORIGIN' => 'http://pixelmani.test.evil.example', 'HTTP_X_CSRF_TOKEN' => $csrf], $cookie);
+check('X-Forwarded-Host does not rescue a foreign Origin', ($r['result'] ?? null) === ['http' => 403, 'code' => 'forbidden_origin']);
+$r = adminScript($mutation, $t, ['HTTP_X_CSRF_TOKEN' => $csrf], $cookie);
+check('no Origin (non-browser client) + valid CSRF → allowed', ($r['result'] ?? null) === true);
+$r = adminScript($mutation, $t, $sameOrigin + ['HTTP_X_CSRF_TOKEN' => $csrf], $cookie);
+check('same Origin + valid CSRF → allowed', ($r['result'] ?? null) === true);
+$r = adminScript($mutation, $t, $sameOrigin + ['HTTP_X_CSRF_TOKEN' => $csrf], []);
+check('valid CSRF without the session cookie → 401', ($r['result'] ?? null) === ['http' => 401, 'code' => 'not_authenticated']);
+
+// Idle expiry: 1801 s after the last activity (t = +3000).
+$r = adminScript('$result = $auth->currentAdmin();', ['TEST_NOW' => (string) (2_000_000 + 3000 + 1801)] + $authEnv, [], $cookie);
+check('idle session expires server-side', array_key_exists('result', $r) && $r['result'] === null);
+check('expired session storage is destroyed', !is_file($sessFile($sid)));
+$r = adminScript($mutation, ['TEST_NOW' => (string) (2_000_000 + 3000 + 1802)] + $authEnv, $sameOrigin + ['HTTP_X_CSRF_TOKEN' => $csrf], $cookie);
+check('stale CSRF token no longer works after expiry', ($r['result'] ?? null) === ['http' => 401, 'code' => 'not_authenticated']);
+
+// No cookie: no session, ever.
+$r = adminScript('$result = $auth->currentAdmin();', $authEnv);
+check('without a cookie no session is started', array_key_exists('result', $r) && $r['result'] === null && ($r['session_status'] ?? null) === PHP_SESSION_NONE);
+
+// Logout destroys the session.
+$r = adminScript('$csrf = $auth->login("correct horse battery"); $result = ["sid" => session_id(), "csrf" => $csrf];', $authEnv, $sameOrigin);
+$sid2 = $r['result']['sid'] ?? '';
+$csrf2 = $r['result']['csrf'] ?? '';
+$r = adminScript('$auth->logout(); $result = "out";', $authEnv, $sameOrigin + ['HTTP_X_CSRF_TOKEN' => $csrf2], [$cookieName => $sid2]);
+check('logout with CSRF succeeds', ($r['result'] ?? null) === 'out');
+check('logout deletes the session storage', $sid2 !== '' && !is_file($sessFile($sid2)));
+$r = adminScript('$result = $auth->currentAdmin();', $authEnv, [], [$cookieName => $sid2]);
+check('logged-out session no longer authenticates', array_key_exists('result', $r) && $r['result'] === null);
+
+// Production cookie flags.
+$prodConfig = $storage . '/prod-config.php';
+file_put_contents($prodConfig, '<?php return ' . var_export(validConfig($prod + ['LOG_DIR' => $storage . '/logs', 'STORAGE_DIR' => $storage, 'ADMIN_PASSWORD_HASH' => $testHash]), true) . ';');
+$r = adminScript('$auth->login("correct horse battery"); $result = session_get_cookie_params();', ['PIXELMANI_CONFIG' => $prodConfig, 'TEST_NOW' => '2000000'], ['HTTP_ORIGIN' => 'https://example.com']);
+check('production cookie is Secure + HttpOnly + SameSite=Strict',
+    ($r['result']['secure'] ?? null) === true && ($r['result']['httponly'] ?? null) === true && ($r['result']['samesite'] ?? null) === 'Strict', json_encode($r));
+
+echo "\nPublic endpoints never start a session\n";
+
+$publicEnv = ['APP_ENV' => 'local', 'STORAGE_DIR' => $storage . '/public', 'LOG_DIR' => $storage . '/logs', 'SESSION_IDLE_SECONDS' => 'broken', 'ADMIN_PASSWORD_HASH' => ''];
+foreach (['photos', 'categories', 'hero', 'hero-image', 'health'] as $endpoint) {
+    $file = tempnam(sys_get_temp_dir(), 'pmp') . '.php';
+    file_put_contents($file, "<?php\n\$_SERVER['REQUEST_METHOD'] = 'GET'; \$_COOKIE = ['pixelmani_admin' => 'some-admin-cookie'];\n"
+        . 'register_shutdown_function(function () { fwrite(STDERR, "@@STATUS@@" . session_status()); });' . "\n"
+        . 'require ' . var_export(realpath(__DIR__ . "/../public/api/$endpoint.php"), true) . ';');
+    $process = proc_open([PHP_BINARY, $file], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, array_merge(getenv(), $publicEnv));
+    $out = stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    proc_close($process);
+    @unlink($file);
+    $ok = $endpoint === 'hero-image' ? $out === '' : str_starts_with($out, '{"ok":true');
+    check("/api/$endpoint works with broken admin config and starts no session",
+        $ok && str_contains($err, '@@STATUS@@' . PHP_SESSION_NONE) && !is_dir($storage . '/public/sessions'), substr($out, 0, 80));
+}
+
+$r = adminScript('$result = "unreachable";', ['SESSION_IDLE_SECONDS' => 'broken'] + $authEnv, $sameOrigin);
+check('admin code with broken admin config fails as configuration_error', str_contains(json_encode($r), 'configuration_error'), json_encode($r));
+
+$logs = implode('', array_map('file_get_contents', glob($storage . '/logs/*.log') ?: []));
+check('auth logs contain no password or hash', !str_contains($logs, 'correct horse battery') && !str_contains($logs, substr($testHash, 7)));
+check('auth events are logged without raw IP addresses', str_contains($logs, 'Admin login failed') && !str_contains($logs, '127.0.0.1'));
+
+removeTree($storage);
 
 // ── Database (read-only, real local configuration) ─────────────────────────
 

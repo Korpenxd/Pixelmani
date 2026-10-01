@@ -28,6 +28,10 @@ require_once __DIR__ . '/src/Database.php';
 require_once __DIR__ . '/src/ErrorHandler.php';
 require_once __DIR__ . '/src/PublicUrls.php';
 require_once __DIR__ . '/src/PublicCatalog.php';
+require_once __DIR__ . '/src/AdminConfig.php';
+require_once __DIR__ . '/src/RateLimiter.php';
+require_once __DIR__ . '/src/AdminSession.php';
+require_once __DIR__ . '/src/AdminAuth.php';
 require_once __DIR__ . '/src/App.php';
 
 use PixelMani\App;
@@ -62,5 +66,7 @@ return (static function (): App {
 
     $errors->setDebug($config->isLocal());
 
-    return new App($config, $logger, new Database($config, $logger), $errors);
+    // No session is started here: only admin endpoints do that (see App::adminAuth),
+    // so public requests never receive a cookie.
+    return new App($config, $logger, new Database($config, $logger), $errors, $appRoot);
 })();

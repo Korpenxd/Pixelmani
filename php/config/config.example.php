@@ -21,6 +21,21 @@ return [
     // Optional. URL path (same origin) under which photo files are served.
     // 'UPLOAD_URL_BASE' => '/media',
 
+    // Admin login: the output of PHP password_hash(), never a plaintext password.
+    // Generate with: php -r 'echo password_hash("your password", PASSWORD_DEFAULT), PHP_EOL;'
+    'ADMIN_PASSWORD_HASH' => '',
+
+    // Optional admin session / login settings (defaults shown).
+    // 'SESSION_NAME' => 'pixelmani_admin',
+    // 'SESSION_IDLE_SECONDS' => '1800',     // server-side idle timeout
+    // 'COOKIE_SECURE' => 'true',            // default true unless APP_ENV=local; false is refused outside local
+    // 'LOGIN_RATE_LIMIT_MAX' => '5',        // failed logins per IP ...
+    // 'LOGIN_RATE_LIMIT_WINDOW' => '900',   // ... per this many seconds
+
+    // Optional. Writable, NOT web-accessible directory for admin sessions and
+    // login rate-limit state. Defaults to php/storage.
+    // 'STORAGE_DIR' => '/path/outside/web/root/storage',
+
     // Optional. Defaults to php/storage/logs. Must not be web-accessible.
     // 'LOG_DIR' => '/path/outside/web/root/logs',
 ];
