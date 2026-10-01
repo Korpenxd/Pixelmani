@@ -18,6 +18,9 @@ return [
     'DB_PASSWORD' => 'change-me',
     'DB_CHARSET' => 'utf8mb4',
 
+    // Optional. URL path (same origin) under which photo files are served.
+    // 'UPLOAD_URL_BASE' => '/media',
+
     // Optional. Defaults to php/storage/logs. Must not be web-accessible.
     // 'LOG_DIR' => '/path/outside/web/root/logs',
 ];

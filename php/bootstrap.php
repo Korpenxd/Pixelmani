@@ -26,6 +26,8 @@ require_once __DIR__ . '/src/Http.php';
 require_once __DIR__ . '/src/JsonResponse.php';
 require_once __DIR__ . '/src/Database.php';
 require_once __DIR__ . '/src/ErrorHandler.php';
+require_once __DIR__ . '/src/PublicUrls.php';
+require_once __DIR__ . '/src/PublicCatalog.php';
 require_once __DIR__ . '/src/App.php';
 
 use PixelMani\App;

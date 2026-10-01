@@ -16,11 +16,16 @@ require_once __DIR__ . '/../src/Logger.php';
 require_once __DIR__ . '/../src/Http.php';
 require_once __DIR__ . '/../src/JsonResponse.php';
 require_once __DIR__ . '/../src/Database.php';
+require_once __DIR__ . '/../src/PublicUrls.php';
+require_once __DIR__ . '/../src/PublicCatalog.php';
 
 use PixelMani\Config;
 use PixelMani\ConfigException;
 use PixelMani\Database;
 use PixelMani\Logger;
+use PixelMani\PublicCatalog;
+use PixelMani\PublicUrls;
+use PixelMani\UnsafeStoragePathException;
 
 const BOOTSTRAP = __DIR__ . '/../bootstrap.php';
 
@@ -154,6 +159,84 @@ var_dump(Config::fromArray(validConfig()));
 print_r(Config::fromArray(validConfig()));
 $dump = ob_get_clean();
 check('var_dump/print_r hide the password', !str_contains($dump, 'S3cret-Value!'));
+
+check('UPLOAD_URL_BASE defaults to /media', Config::fromArray(validConfig())->uploadUrlBase === '/media');
+check('UPLOAD_URL_BASE trailing slash removed', Config::fromArray(validConfig(['UPLOAD_URL_BASE' => '/files/']))->uploadUrlBase === '/files');
+check('nested UPLOAD_URL_BASE accepted', configError(validConfig(['UPLOAD_URL_BASE' => '/files/photos'])) === null);
+foreach (['uploads', 'http://cdn.example/uploads', '//cdn.example', '/up loads', '/../uploads', '/uploads/..', '/./x', '/up%2Floads'] as $base) {
+    check("UPLOAD_URL_BASE '$base' is rejected", configError(validConfig(['UPLOAD_URL_BASE' => $base])) !== null);
+}
+
+// ── Public URLs and path safety ─────────────────────────────────────────────
+
+echo "\nPublic URLs and path safety\n";
+
+$urls = new PublicUrls('http://pixelmani.test', '/media');
+check('gallery path becomes a URL', $urls->forStoragePath('uploads/abc-kitty.webp') === 'http://pixelmani.test/media/uploads/abc-kitty.webp');
+check('hero path becomes a URL', $urls->forStoragePath('hero/x.webp') === 'http://pixelmani.test/media/hero/x.webp');
+check('Swedish characters are percent-encoded per segment', $urls->forStoragePath('uploads/porträtt å.webp') === 'http://pixelmani.test/media/uploads/portr%C3%A4tt%20%C3%A5.webp');
+check('reserved characters are encoded', $urls->forStoragePath('uploads/a#b?c&d.webp') === 'http://pixelmani.test/media/uploads/a%23b%3Fc%26d.webp');
+check('null optional path gives null', $urls->forOptionalStoragePath(null) === null && $urls->forOptionalStoragePath('') === null);
+
+$unsafe = [
+    'traversal' => 'uploads/../bootstrap.php',
+    'leading traversal' => '../uploads/x.webp',
+    'dot segment' => 'uploads/./x.webp',
+    'empty segment' => 'uploads//x.webp',
+    'trailing slash' => 'uploads/',
+    'backslash' => 'uploads\\..\\x.webp',
+    'absolute' => '/uploads/x.webp',
+    'null byte' => "uploads/x.webp\0.php",
+    'newline' => "uploads/x\n.webp",
+    'http scheme' => 'http://evil.example/x.webp',
+    'https scheme' => 'https://evil.example/x.webp',
+    'file scheme' => 'file:///etc/passwd',
+    'windows drive' => 'C:/Windows/win.ini',
+    'protocol-relative' => '//evil.example/x.webp',
+    'unknown root' => 'secret/x.webp',
+    'bare root folder' => 'uploads',
+    'invalid UTF-8' => "uploads/\xC3\x28.webp",
+    'too long' => 'uploads/' . str_repeat('a', 600),
+];
+foreach ($unsafe as $label => $path) {
+    try {
+        $urls->forStoragePath($path);
+        check("unsafe path rejected: $label", false, 'accepted');
+    } catch (UnsafeStoragePathException) {
+        check("unsafe path rejected: $label", true);
+    }
+}
+
+// The real catalog queries against a throwaway in-memory database holding a
+// malicious stored path: it must be refused, not turned into a URL.
+$memory = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+$memory->exec('CREATE TABLE photos (id, name, storage_path, category, title, location, `date`, created_at, is_hero, thumb_path, width, height, bytes, mime)');
+$memory->exec('CREATE TABLE site_settings (`key`, value)');
+$insert = $memory->prepare('INSERT INTO photos VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, 0, NULL, NULL, NULL, NULL, NULL)');
+$insert->execute(['p1', 'ok.jpg', 'uploads/ok.webp', 'natur', '2026-01-02 00:00:00.000000']);
+$memoryCatalog = new PublicCatalog($memory, $urls);
+check('catalog maps a safe row', ($memoryCatalog->photos(1)[0]['url'] ?? null) === 'http://pixelmani.test/media/uploads/ok.webp');
+$insert->execute(['p2', 'evil.jpg', '../../php/bootstrap.php', 'natur', '2026-01-01 00:00:00.000000']);
+try {
+    $memoryCatalog->photos();
+    check('catalog refuses a malicious stored path', false, 'accepted');
+} catch (UnsafeStoragePathException) {
+    check('catalog refuses a malicious stored path', true);
+}
+$memory->exec("INSERT INTO site_settings VALUES ('hero_image_path', 'https://evil.example/x.webp')");
+try {
+    $memoryCatalog->heroUrl();
+    check('catalog refuses an external hero URL', false, 'accepted');
+} catch (UnsafeStoragePathException) {
+    check('catalog refuses an external hero URL', true);
+}
+
+check('timestamp converted to ISO-8601 UTC with microseconds', PublicCatalog::isoTimestamp('2026-06-14 20:47:16.012877') === '2026-06-14T20:47:16.012877Z');
+check('timestamp without fraction handled', PublicCatalog::isoTimestamp('2026-06-14 20:47:16') === '2026-06-14T20:47:16.000000Z');
+$previousZone = date_default_timezone_get();
+date_default_timezone_set('Pacific/Auckland');
+check('PHP time zone does not shift timestamps', PublicCatalog::isoTimestamp('2026-01-01 00:00:00.000001') === '2026-01-01T00:00:00.000001Z');
+date_default_timezone_set($previousZone);
 
 // ── Bootstrap and error handling (separate processes) ──────────────────────
 

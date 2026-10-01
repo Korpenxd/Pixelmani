@@ -23,8 +23,11 @@ final class Config
     public const KEYS = [
         'APP_ENV', 'SITE_URL',
         'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_CHARSET',
-        'LOG_DIR',
+        'LOG_DIR', 'UPLOAD_URL_BASE',
     ];
+
+    /** URL path under which stored photo files are served, on the same origin. */
+    public const DEFAULT_UPLOAD_URL_BASE = '/media';
 
     public const ENVIRONMENTS = ['local', 'staging', 'production'];
 
@@ -38,6 +41,7 @@ final class Config
         #[\SensitiveParameter] private readonly string $dbPassword,
         public readonly string $dbCharset,
         public readonly ?string $logDir,
+        public readonly string $uploadUrlBase,
     ) {}
 
     public function isLocal(): bool
@@ -166,6 +170,14 @@ final class Config
 
         $logDir = $get('LOG_DIR');
 
+        // A same-origin path such as "/media": letters, digits, ".", "_", "-"
+        // in each segment, no trailing slash, no scheme, host or traversal.
+        $uploadUrlBase = rtrim($get('UPLOAD_URL_BASE') ?: self::DEFAULT_UPLOAD_URL_BASE, '/');
+        if (!preg_match('#^(/[A-Za-z0-9_-][A-Za-z0-9._-]*)+$#', $uploadUrlBase)
+            || preg_match('#/\.\.?(/|$)#', $uploadUrlBase)) {
+            throw new ConfigException('UPLOAD_URL_BASE must be a path such as /media (no scheme, host or "..").');
+        }
+
         return new self(
             appEnv: $appEnv,
             siteUrl: $siteUrl,
@@ -176,6 +188,7 @@ final class Config
             dbPassword: $dbPassword,
             dbCharset: $dbCharset,
             logDir: $logDir === '' ? null : $logDir,
+            uploadUrlBase: $uploadUrlBase,
         );
     }
 

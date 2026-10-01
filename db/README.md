@@ -10,6 +10,8 @@ here is used by the Next.js app yet.
 | `seed.sql` | Ensures the `okategoriserad` fallback category exists. Idempotent. |
 | `tools/export-supabase.mjs` | **Read-only** export of Supabase rows and photo files into `migration-export/`. |
 | `tools/import-bundle.php` | Imports `migration-export/` into a **local** database. |
+| `tools/copy-bundle-files.php` | Copies the exported photo files to `php/public/media/` (local runtime, gitignored), verified against the manifest. |
+| `tools/compare-supabase-php.mjs` | **Read-only** check that the local PHP API returns the same data and file bytes as Supabase. |
 
 The SQL stays inside a subset that behaves the same on MySQL 8.4 (local,
 Laragon) and MariaDB 10.6+ (production). See the comments in `schema.sql`.

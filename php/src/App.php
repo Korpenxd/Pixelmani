@@ -14,6 +14,12 @@ final class App
         private readonly ErrorHandler $errors,
     ) {}
 
+    /** Read-only queries for the public API (connects on first use). */
+    public function catalog(): PublicCatalog
+    {
+        return new PublicCatalog($this->db->pdo(), PublicUrls::fromConfig($this->config));
+    }
+
     /**
      * Runs an endpoint. Anything it throws is turned into a JSON error by the
      * central error handler.

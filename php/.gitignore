@@ -2,3 +2,6 @@
 /config/config.php
 /storage/logs/*
 !/storage/logs/.gitkeep
+
+# Local runtime copies of photo files (see db/tools/copy-bundle-files.php)
+/public/media/
