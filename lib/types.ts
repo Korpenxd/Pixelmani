@@ -14,7 +14,7 @@ export type Photo = {
   date: string | null
   created_at: string
   is_hero: boolean
-  /** Migration fields. Null until thumbnails/metadata exist (and always from Supabase). */
+  /** Null for photos migrated without thumbnails/metadata; set for every new upload. */
   thumb_path: string | null
   /** Smaller variant for grids and cards; fall back to `url` when null. */
   thumb_url: string | null
@@ -29,11 +29,4 @@ export type Category = {
   key: string
   label: string
   created_at: string
-}
-
-/** Storage used by uploaded photos, as shown in the admin dashboard. */
-export type StorageUsage = {
-  total_bytes: number
-  total_mb: number
-  file_count: number
 }

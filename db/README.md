@@ -1,8 +1,10 @@
 # PixelMani database (MySQL / MariaDB)
 
 The schema for the PHP/MySQL version of PixelMani and the tooling to move the
-current Supabase data into it. The live site still runs on Supabase; nothing
-here is used by the Next.js app yet.
+current Supabase data into it. The production site still runs on Supabase until
+the switch to Loopia. The application itself no longer uses Supabase at all;
+only these tools do, read-only, for the **final data sync** right before the
+switch. Keep them (and their environment variables) until that sync is done.
 
 | File | Purpose |
 | --- | --- |
@@ -97,6 +99,11 @@ node db/tools/export-supabase.mjs
 
 - Uses `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from the
   environment or `.env.local`, which is the same public access every visitor has.
+  These are **migration-tool** variables only: the app no longer reads them,
+  and nothing in the static export contains them. The `NEXT_PUBLIC_` prefix
+  is historical and kept so the existing `.env.local` keeps working.
+- Needs no npm package: plain `fetch` and Node built-ins (Node 20.12+ for
+  `process.loadEnvFile`). `compare-supabase-php.mjs` works the same way.
 - Only issues HTTP `GET` requests, and only to:
   - `/rest/v1/photos`, `/rest/v1/categories` and `/rest/v1/site_settings` (rows)
   - `/storage/v1/object/public/photos/<storage_path>` (files)

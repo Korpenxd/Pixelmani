@@ -2,11 +2,8 @@ import { phpDataSource } from '@/lib/data/php'
 import type { PublicDataSource } from '@/lib/data/types'
 
 /**
- * The active data source for the public pages: the PHP API.
- *
- * The Supabase implementation (lib/data/supabase.ts) satisfies the same
- * contract and could be switched back in here, but it is deliberately not
- * imported, so the public bundle carries no Supabase client.
+ * The data source for the public pages: the PHP API. Used at build time (the
+ * static export's snapshot) and in the browser (the runtime refresh).
  * The admin dashboard uses the PHP admin client (lib/adminApi.ts) instead.
  */
 const publicData: PublicDataSource = phpDataSource
@@ -19,4 +16,4 @@ export const {
   getHeroImageSrc,
 } = publicData
 
-export type { AdminDataSource, PublicDataSource } from '@/lib/data/types'
+export type { PublicDataSource } from '@/lib/data/types'

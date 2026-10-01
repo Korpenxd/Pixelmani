@@ -9,9 +9,9 @@ import { siteConfig } from '@/lib/site'
 import { jsonLdGraph, showcaseGraph, siteGraph } from '@/lib/structuredData'
 import { getCategories, getPhotos } from '@/lib/data'
 
-// Keeps the gallery crawlable and in sync with the admin dashboard.
-export const revalidate = 300
-
+// Static export: the gallery in the HTML is a build-time snapshot from the PHP
+// API (crawlable); ShowcaseClient refreshes it from /api/photos and
+// /api/categories in the browser.
 export const metadata: Metadata = pageMetadata({
   title: 'Bildgalleri – porträtt, natur och stadsmiljöer',
   description: `Ett urval fotografier av ${siteConfig.photographer}: porträtt, natur, stadsmiljöer och experimentella motiv. Fotograferingar sker i ${siteConfig.serviceArea}.`,

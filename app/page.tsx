@@ -13,10 +13,8 @@ import { siteConfig } from '@/lib/site'
 import { jsonLdGraph, siteGraph } from '@/lib/structuredData'
 import { getHeroImageSrc, getLatestPhotos } from '@/lib/data'
 
-// Photos are added through the admin dashboard, so the prerendered page is
-// refreshed periodically instead of being frozen at build time.
-export const revalidate = 300
-
+// Static export: the photos and hero in the HTML are a build-time snapshot
+// from the PHP API; LatestPhotos refreshes them from /api/photos in the browser.
 export const metadata: Metadata = pageMetadata({
   title: `Fotograf i ${siteConfig.city} – porträtt, familj och modellfoto | ${siteConfig.name}`,
   titleIsAbsolute: true,

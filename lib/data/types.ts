@@ -1,4 +1,4 @@
-import type { Category, Photo, StorageUsage } from '@/lib/types'
+import type { Category, Photo } from '@/lib/types'
 
 /**
  * Read operations behind the public pages. The active implementation is
@@ -23,15 +23,4 @@ export type PublicDataSource = {
    * reference (and preload) it without knowing which file is current.
    */
   getHeroImageSrc(): Promise<string | null>
-}
-
-/**
- * Reads the current admin dashboard needs. Temporary: served by Supabase
- * until the PHP admin backend replaces it.
- */
-export type AdminDataSource = {
-  getPhotos(): Promise<Photo[]>
-  getCategories(): Promise<Category[]>
-  getHeroImageUrl(): Promise<string | null>
-  getStorageUsage(): Promise<StorageUsage | null>
 }

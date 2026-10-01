@@ -1,17 +1,26 @@
 # PixelMani PHP backend
 
-A small, framework-free PHP 8.3 + PDO backend that will replace the Next.js
-API routes and Supabase on ordinary shared hosting. It runs **alongside** the
-current Next.js/Supabase site and is not used by it yet.
+A small, framework-free PHP 8.3 + PDO backend for ordinary shared hosting. It
+is the site's only runtime backend. The frontend is a Next.js **static export**
+(plain HTML/CSS/JS in `out/`), so production needs no Node.js:
 
-So far it provides the foundation (configuration, database connection, JSON
-responses, method checks, error handling, logging, health check) and the
-public read-only API, admin authentication (login, session, logout), the
+```
+Apache ─┬─ static files from the export (/, /showcase, /admin, /_next/…)
+        ├─ PHP API          /api/*      (php/public/api)
+        └─ photo files      /media/*    (MEDIA_DIR)
+                └─ MySQL / MariaDB
+```
+
+It provides the foundation (configuration, database connection, JSON
+responses, method checks, error handling, logging, health check), the public
+read-only API, admin authentication (login, session, logout), the
 authenticated photo upload and the rest of the admin backend: photo edits and
 deletion, categories, the hero image and storage usage. There is no contact
-endpoint yet. The admin frontend (`/admin`) uses these endpoints only; the old
-Next.js admin routes and Supabase code are still in the repository, unused,
-until they are removed.
+endpoint yet.
+
+The old Next.js API routes and the Supabase runtime have been removed. Only
+the read-only migration tools in `db/tools/` still talk to Supabase, for the
+final data sync before the switch (see `db/README.md`).
 
 ## Layout
 
@@ -195,8 +204,8 @@ Files are served by Apache as static files from the web root, under
 <web root>/media/hero/<uuid>-name.webp      ← site_settings.hero_image_path "hero/…"
 ```
 
-Locally the web root is `php/public`. Fill `php/public/media/`
-(gitignored) from the Supabase export with a **manual** step:
+Locally the media files live in `php/public/media`. Fill it (gitignored) from
+the Supabase export with a **manual** step:
 
 ```bash
 php db/tools/copy-bundle-files.php            # --dry-run to preview
@@ -209,28 +218,32 @@ manifest checksum. The bundle is not modified, and re-running is safe.
 Blocking script execution inside the upload folder is part of the production
 Apache phase. It is not configured yet.
 
-## Frontend integration (Phase 5A, implemented)
+## Frontend integration (static export)
 
-The public pages now read from this API through `lib/data/php.ts`. The admin
-still reads Supabase, through `lib/data/admin.ts`.
+The public pages read this API through `lib/data/php.ts`; the admin uses
+`lib/adminApi.ts` (see "Admin frontend" below).
 
-- **Photo model:** the neutral `Photo` type in `lib/types.ts` gains nullable
-  `thumb_path`, `thumb_url`, `width`, `height`, `bytes` and `mime`,
-  matching this API. The Supabase data source returns `null` for them.
+- **Photo model:** the neutral `Photo` type in `lib/types.ts` matches this
+  API, including the nullable `thumb_path`, `thumb_url`, `width`,
+  `height`, `bytes` and `mime` (null for migrated photos without them).
   Components use `thumb_url ?? url` wherever a thumbnail is enough.
-- **SEO / rendering:** a build-time snapshot plus a client refresh.
-  - At build time the static export fetches photos, categories and the hero
-    from this PHP API. The initial HTML, the image gallery and the JSON-LD are
-    rendered from that snapshot, so crawlers see real content without
-    JavaScript.
-  - After hydration the browser calls `/api/photos` and `/api/categories`
-    (both `no-cache`) and replaces the snapshot. Visitors see admin changes
-    without a rebuild.
-  - The sitemap needs its own decision in Phase 5, because a snapshot sitemap
-    would only list photos from the last build.
-- **Hero:** the public hero image uses `/api/hero-image` (302 to the
-  current file) as a stable URL in the static HTML, so it can keep its preload
-  and its LCP behaviour while the hero can still be changed from admin.
+- **Build-time snapshot:** `npm run build` fetches photos, categories and the
+  hero from the PHP API named by `PIXELMANI_BUILD_API_BASE` (server-side only,
+  never in the browser bundle). The HTML of `/` and `/showcase`, the image
+  gallery, the JSON-LD and `sitemap.xml` are rendered from it, so crawlers see
+  real content without JavaScript.
+  - If the variable is missing or the API cannot be reached, the build
+    **fails** with a `PublicApiError`. It never produces empty pages, and
+    there is no Supabase fallback.
+- **Runtime refresh:** after loading, the browser calls `/api/photos` (and
+  `/api/categories` on `/showcase`), both `no-cache`, and replaces the
+  snapshot. Visitors see admin changes without a rebuild. There is no ISR;
+  the snapshot is only as old as the last build.
+- **Sitemap:** generated at build time, so it lists the photos that existed
+  then. Rebuild (or rebuild periodically) to refresh it.
+- **Hero:** the static HTML uses `/api/hero-image` (302 to the current file)
+  as a stable `src` and preload, so the hero can change from the admin
+  without a rebuild.
 
 ## Admin authentication
 
@@ -733,9 +746,111 @@ On Windows, Apache matches the case of existing directories case-insensitively
 (`/api/admin/Photos/update` still works locally). Linux hosting is
 case-sensitive.
 
+## Testing the static export locally
+
+`npm run dev` behind the vhost above is for development. To test what
+production will serve, with **no Node.js process**, use the separate static
+test server:
+
+```bash
+npm run build           # PHP/MySQL must be running (PIXELMANI_BUILD_API_BASE)
+npm run serve:static    # Apache on http://pixelmani.test:8090/ serving out/ + PHP
+node php/dev/serve-static.mjs stop
+```
+
+`php/dev/serve-static.mjs` starts a separate Apache instance (Laragon's
+httpd and PHP), using `php/dev/apache-static.local.conf` as a template.
+Laragon's own Apache and the dev proxy are not touched. Its configuration and
+logs go to the system temp folder.
+
+| Path | Served by |
+| --- | --- |
+| `/`, `/showcase`, `/admin` | `out/index.html`, `out/showcase.html`, `out/admin.html` |
+| `/api/*` | PHP |
+| `/media/*` | the photo files, with PHP execution off |
+
+- **Nothing else is reachable:** `php/src`, `php/config`, `php/storage`,
+  `db/` and `.env*` all give 404.
+- **Origin:** a local-only `SetEnv SITE_URL` gives PHP the `:8090` origin, so
+  admin login and CSRF work there.
+- **Headers:** the security headers from the Apache handoff below are sent,
+  except HSTS and `upgrade-insecure-requests`, which need https.
+- **Environment overrides:** `PIXELMANI_HTTPD`, `PIXELMANI_MOD_PHP_CONF` and
+  `PIXELMANI_STATIC_PORT`.
+
+## Apache handoff (Phase 10)
+
+Next.js no longer serves the site, so everything `next.config.ts` used to do
+at runtime must be done by Apache in production. **These are required**,
+otherwise the move to static hosting would weaken security or break URLs.
+
+### Security headers (were `headers()` in `next.config.ts`, for every path)
+
+| Header | Value | Local static test |
+| --- | --- | --- |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests` | yes, without `upgrade-insecure-requests` |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains` | no (https only) |
+| `X-Content-Type-Options` | `nosniff` | yes |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | yes |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), browsing-topics=()` | yes |
+| `X-Frame-Options` | `DENY` | yes |
+
+- **Supabase hosts removed from the CSP:** they were the Supabase project URL
+  in `img-src` and `connect-src`, and its `wss://` host. Nothing loads from
+  Supabase any more.
+- **`'unsafe-inline'` in `script-src`:** still needed, because the static
+  export inlines its hydration data in `<script>` tags.
+- **Where to set them:** destination is the production `.htaccess` /
+  vhost, for every response including `/api` and `/media`.
+- **nosniff duplicates:** use `Header always set`. PHP also sends `nosniff`,
+  so add `Header unset X-Content-Type-Options` first, or the API sends it twice
+  (see the static test config).
+
+### Redirect (was `redirects()` in `next.config.ts`)
+
+- `www.pixelmani.se/*` → `https://pixelmani.se/*`, permanent (Next sent 308;
+  301 is fine). Keep the canonical host single.
+- Also needed in Phase 10: http → https.
+
+### Clean URLs and export layout
+
+- **No trailing slash (`trailingSlash: false`):** Next writes
+  `showcase.html` and `admin.html`, each next to a `showcase/` or `admin/`
+  directory of navigation payloads. Canonical URLs stay `/showcase` and
+  `/admin`.
+- **Apache rules:**
+  - map `/<path>` → `/<path>.html` when that file exists
+  - set `DirectorySlash Off` for the export, so `/admin` is not redirected
+    to the directory
+  - 301 `/<path>/` → `/<path>`
+  - `ErrorDocument 404 /404.html`
+
+  `php/dev/apache-static.local.conf` has working local versions.
+- **Navigation payloads:** `*.txt` and `__next.*` files must be served as
+  `text/plain` (Apache's default for `.txt`).
+- **Windows builds:** on Windows, Next 16.2.7 misplaces the page segment
+  payloads (`__next.showcase/__PAGE__.txt` instead of
+  `__next.showcase.__PAGE__.txt`). `npm run build` runs
+  `scripts/fix-export-segments.mjs` afterwards (`postbuild`), which moves
+  them to the names the browser requests. On Linux it does nothing.
+- **Link clicks reload the page:** in the local tests, clicks on `<Link>`
+  between pages fall back to a normal full page load instead of a
+  client-side transition. This is not caused by Apache or the headers. Pages
+  are complete static HTML, so nothing breaks; re-check with a Linux build in
+  Phase 10.
+
+### Also for Phase 10
+
+- **PHP:** execute only under `/api`. `/media` must never execute scripts.
+- **Private paths:** no access to `php/src`, `php/config`, `php/storage` or
+  any `.env*`.
+- **Caching:** long-lived cache headers for `/_next/static/*` (the file names
+  are content hashed); short or `no-cache` for HTML and `*.txt` payloads.
+
 ## Admin frontend
 
-`/admin` renders entirely in the browser, so it is statically renderable:
+`/admin` renders entirely in the browser; the static export contains only its
+shell (`out/admin.html`), with no admin data:
 
 - **Shell:** `components/AdminApp.tsx` calls `GET /api/admin/session` and shows
   `AdminLogin` or `AdminDashboard`. It reads no cookies and has no server code.

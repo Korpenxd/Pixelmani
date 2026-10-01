@@ -4,8 +4,10 @@ import { absoluteUrl, siteUrl } from '@/lib/site'
 import { getHeroImageUrl, getPhotos } from '@/lib/data'
 
 // Only public, indexable routes belong here — /admin and /api are excluded
-// both from this file and from robots.txt.
-export const revalidate = 3600
+// both from this file and from robots.txt. Generated at build time (static
+// export), so it lists the photos that existed when the site was built.
+// The static export requires metadata routes to be declared static.
+export const dynamic = 'force-static'
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const [photos, heroImageUrl] = await Promise.all([
