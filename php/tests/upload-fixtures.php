@@ -52,6 +52,11 @@ function makeUploadFixtures(string $dir): array
     $webp('full-too-wide.webp', 2001, 1000, 5);
     $webp('thumb-too-tall.webp', 400, 601, 6);
 
+    // Hero images: up to 2560 × 2560.
+    $webp('hero-max.webp', 2560, 1440, 9, 88);
+    $webp('hero-b.webp', 1920, 1080, 10, 88);
+    $webp('hero-too-wide.webp', 2561, 400, 11, 88);
+
     // Not WebP, whatever the name says.
     $jpeg = "$dir/jpeg-renamed.webp";
     imagejpeg($image(400, 300, 7), $jpeg, 85);

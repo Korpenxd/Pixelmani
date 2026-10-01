@@ -124,7 +124,8 @@ final class Http
 
     /**
      * Reads a JSON object request body (Content-Type: application/json, at
-     * most $maxBytes). Anything else is a 400. The body is never logged.
+     * most $maxBytes, else 413). Anything else is a 400. The body is never
+     * logged. Combine with Input::fields() to reject unknown fields.
      *
      * @return array<string, mixed>
      */
@@ -136,8 +137,11 @@ final class Http
         }
 
         $body = file_get_contents('php://input', false, null, 0, $maxBytes + 1);
-        if ($body === false || $body === '' || strlen($body) > $maxBytes) {
-            throw new HttpException(400, 'invalid_request', 'The request body is missing or too large.');
+        if ($body === false || $body === '') {
+            throw new HttpException(400, 'invalid_request', 'The request body is missing.');
+        }
+        if (strlen($body) > $maxBytes) {
+            throw new HttpException(413, 'request_too_large', 'The request body is too large.');
         }
 
         try {

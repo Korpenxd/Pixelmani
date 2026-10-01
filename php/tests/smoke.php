@@ -25,10 +25,18 @@ require_once __DIR__ . '/../src/WebpInspector.php';
 require_once __DIR__ . '/../src/MediaStore.php';
 require_once __DIR__ . '/../src/UploadRequest.php';
 require_once __DIR__ . '/../src/PhotoUploader.php';
+require_once __DIR__ . '/../src/Input.php';
+require_once __DIR__ . '/../src/PhotoAdmin.php';
+require_once __DIR__ . '/../src/CategoryAdmin.php';
+require_once __DIR__ . '/../src/HeroUploader.php';
 require_once __DIR__ . '/upload-fixtures.php';
 
 use PixelMani\AdminConfig;
 use PixelMani\HttpException;
+use PixelMani\CategoryAdmin;
+use PixelMani\HeroUploader;
+use PixelMani\Input;
+use PixelMani\PhotoAdmin;
 use PixelMani\MediaStore;
 use PixelMani\PhotoUploader;
 use PixelMani\UploadConfig;
@@ -91,7 +99,8 @@ function configError(array $raw): ?string
  */
 function runEndpoint(string $body, array $env, string $method = 'GET'): array
 {
-    $file = tempnam(sys_get_temp_dir(), 'pmx') . '.php';
+    $placeholder = tempnam(sys_get_temp_dir(), 'pmx');
+    $file = $placeholder . '.php';
     file_put_contents($file, "<?php\n\$_SERVER['REQUEST_METHOD'] = " . var_export($method, true) . ";\n"
         . '$app = require ' . var_export(realpath(BOOTSTRAP), true) . ";\n" . $body);
 
@@ -102,6 +111,7 @@ function runEndpoint(string $body, array $env, string $method = 'GET'): array
     fclose($pipes[2]);
     $code = proc_close($process);
     @unlink($file);
+    @unlink($placeholder);
 
     return [$stdout, $code];
 }
@@ -451,7 +461,8 @@ function removeTree(string $dir): void
  */
 function adminScript(string $code, array $env, array $server = [], array $cookies = []): mixed
 {
-    $file = tempnam(sys_get_temp_dir(), 'pma') . '.php';
+    $placeholder = tempnam(sys_get_temp_dir(), 'pma');
+    $file = $placeholder . '.php';
     $prelude = '$_SERVER = array_merge($_SERVER, ' . var_export($server + ['REQUEST_METHOD' => 'POST', 'REMOTE_ADDR' => '127.0.0.1'], true) . ');'
         . '$_COOKIE = ' . var_export($cookies, true) . ';'
         . '$app = require ' . var_export(realpath(BOOTSTRAP), true) . ';'
@@ -470,6 +481,7 @@ function adminScript(string $code, array $env, array $server = [], array $cookie
     fclose($pipes[2]);
     proc_close($process);
     @unlink($file);
+    @unlink($placeholder);
     $marker = strrpos($out, '@@RESULT@@');
     return $marker === false ? ['raw' => substr($out, 0, 300)] : json_decode(substr($out, $marker + 10), true);
 }
@@ -577,7 +589,8 @@ echo "\nPublic endpoints never start a session\n";
 
 $publicEnv = ['APP_ENV' => 'local', 'STORAGE_DIR' => $storage . '/public', 'LOG_DIR' => $storage . '/logs', 'SESSION_IDLE_SECONDS' => 'broken', 'ADMIN_PASSWORD_HASH' => ''];
 foreach (['photos', 'categories', 'hero', 'hero-image', 'health'] as $endpoint) {
-    $file = tempnam(sys_get_temp_dir(), 'pmp') . '.php';
+    $placeholder = tempnam(sys_get_temp_dir(), 'pmp');
+    $file = $placeholder . '.php';
     file_put_contents($file, "<?php\n\$_SERVER['REQUEST_METHOD'] = 'GET'; \$_COOKIE = ['pixelmani_admin' => 'some-admin-cookie'];\n"
         . 'register_shutdown_function(function () { fwrite(STDERR, "@@STATUS@@" . session_status()); });' . "\n"
         . 'require ' . var_export(realpath(__DIR__ . "/../public/api/$endpoint.php"), true) . ';');
@@ -588,6 +601,7 @@ foreach (['photos', 'categories', 'hero', 'hero-image', 'health'] as $endpoint) 
     fclose($pipes[2]);
     proc_close($process);
     @unlink($file);
+    @unlink($placeholder);
     $ok = $endpoint === 'hero-image' ? $out === '' : str_starts_with($out, '{"ok":true');
     check("/api/$endpoint works with broken admin config and starts no session",
         $ok && str_contains($err, '@@STATUS@@' . PHP_SESSION_NONE) && !is_dir($storage . '/public/sessions'), substr($out, 0, 80));
@@ -960,6 +974,587 @@ try {
 } catch (Throwable $e) {
     check('MySQL upload checks', false, get_class($e) . ': ' . $e->getMessage());
 }
+
+// ── Admin backend: edits, deletion, categories, hero, storage usage ────────
+
+echo "\nAdmin input validation\n";
+
+/** Runs $fn; null if it succeeded, ['http', 'code'] for an HttpException, else the exception class. */
+$outcome = static function (callable $fn): array|string|null {
+    try {
+        $fn();
+        return null;
+    } catch (HttpException $e) {
+        return ['http' => $e->status, 'code' => $e->errorCode];
+    } catch (Throwable $e) {
+        return get_class($e);
+    }
+};
+$bad = ['http' => 400, 'code' => 'invalid_request'];
+
+check('unknown JSON field → 400', $outcome(fn () => Input::fields(['id' => 'x', 'title' => 'y'], ['id'])) === $bad);
+check('missing required field → 400', $outcome(fn () => Input::fields(['category' => 'x'], ['id', 'category'])) === $bad);
+check('exact field set accepted', $outcome(fn () => Input::fields(['id' => 1, 'category' => 2], ['id', 'category'])) === null);
+$sampleId = '81bb4337-4761-4ea8-bf16-b07dd116dab1';
+check('canonical UUID accepted', Input::uuid($sampleId, 'id') === $sampleId);
+foreach ([
+    'upper-case UUID' => strtoupper($sampleId),
+    'truncated UUID' => '81bb4337-4761-4ea8-bf16',
+    'UUID + trailing newline' => $sampleId . "\n",
+    'number as ID' => 42,
+    'array as ID' => [$sampleId],
+    'path traversal as ID' => '../../etc/passwd',
+] as $label => $value) {
+    check("$label → 400", $outcome(fn () => Input::uuid($value, 'id')) === $bad);
+}
+$manyIds = array_map(static fn (int $i): string => sprintf('00000000-0000-4000-8000-%012d', $i), range(1, 101));
+check('100 distinct IDs accepted', count(Input::uuidList(array_slice($manyIds, 0, 100), 'ids', 100)) === 100);
+check('101 IDs → 400', $outcome(fn () => Input::uuidList($manyIds, 'ids', 100)) === $bad);
+check('empty ID list → 400', $outcome(fn () => Input::uuidList([], 'ids', 100)) === $bad);
+check('duplicate IDs → 400', $outcome(fn () => Input::uuidList([$manyIds[0], $manyIds[1], $manyIds[0]], 'ids', 100)) === $bad);
+check('IDs as a JSON object → 400', $outcome(fn () => Input::uuidList(['a' => $manyIds[0]], 'ids', 100)) === $bad);
+check('ID list containing a number → 400', $outcome(fn () => Input::uuidList([$manyIds[0], 5], 'ids', 100)) === $bad);
+check('location as an array → 400', $outcome(fn () => Input::text(['x'], 'location', 255)) === $bad);
+check('location over 255 characters → 400', $outcome(fn () => Input::text(str_repeat('å', 256), 'location', 255)) === $bad);
+check('255 Swedish characters accepted (counted as characters)', Input::text(str_repeat('å', 255), 'location', 255) === str_repeat('å', 255));
+check('blank location → null', Input::text('   ', 'location', 255) === null);
+check('location with a control character inside → 400', $outcome(fn () => Input::text("O\x00rt", 'location', 255)) === $bad && $outcome(fn () => Input::text("Ort\nNy", 'location', 255)) === $bad);
+check('location with invalid UTF-8 → 400', $outcome(fn () => Input::text("\xC3\x28", 'location', 255)) === $bad);
+check('impossible date → 400', $outcome(fn () => Input::date('2026-02-30')) === $bad);
+check('date with a time → 400', $outcome(fn () => Input::date('2026-02-03T10:00')) === $bad);
+check('date as a number → 400', $outcome(fn () => Input::date(20260203)) === $bad);
+check('blank or null date → null', Input::date('') === null && Input::date(null) === null);
+check('leap day accepted', Input::date('2028-02-29') === '2028-02-29');
+
+/** SQLite with the application schema, enforced foreign keys and switchable failure triggers. */
+final class CountingPDO extends PDO
+{
+    public int $transactions = 0;
+
+    public function beginTransaction(): bool
+    {
+        $this->transactions++;
+        return parent::beginTransaction();
+    }
+}
+$adminDb = static function (): CountingPDO {
+    $pdo = new CountingPDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+    $pdo->exec('PRAGMA foreign_keys = ON');
+    $pdo->exec('CREATE TABLE categories (id TEXT PRIMARY KEY, `key` TEXT NOT NULL UNIQUE, label TEXT NOT NULL, created_at TEXT NOT NULL)');
+    $pdo->exec('CREATE TABLE photos (id TEXT PRIMARY KEY, name TEXT NOT NULL, storage_path TEXT NOT NULL UNIQUE,
+        category TEXT NOT NULL REFERENCES categories(`key`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+        title TEXT, location TEXT, `date` TEXT, created_at TEXT NOT NULL, is_hero INTEGER NOT NULL DEFAULT 0,
+        thumb_path TEXT, width INTEGER, height INTEGER, bytes INTEGER, mime TEXT)');
+    $pdo->exec('CREATE TABLE site_settings (`key` TEXT PRIMARY KEY, value TEXT, updated_at TEXT)');
+    $pdo->exec('CREATE TABLE fail_on (what TEXT)');
+    $pdo->exec("INSERT INTO categories VALUES
+        ('c1', 'natur', 'Natur', '2026-01-01 00:00:00.000000'),
+        ('c2', 'okategoriserad', 'Okategoriserad', '2026-01-01 00:00:00.000000'),
+        ('c3', 'porträtt', 'Porträtt', '2026-01-01 00:00:00.000000'),
+        ('c4', 'stad', 'Stad', '2026-01-01 00:00:00.000000')");
+    foreach ([
+        'photo-update' => 'BEFORE UPDATE ON photos',
+        'category-delete' => 'BEFORE DELETE ON categories',
+        'hero-update' => 'BEFORE UPDATE ON site_settings',
+        'hero-insert' => 'BEFORE INSERT ON site_settings',
+    ] as $what => $when) {
+        $pdo->exec("CREATE TRIGGER \"fail_$what\" $when WHEN EXISTS (SELECT 1 FROM fail_on WHERE what = '$what') BEGIN SELECT RAISE(ABORT, 'forced failure'); END");
+    }
+    // One specific row refuses deletion: makes a bulk delete fail half-way.
+    $pdo->exec("CREATE TRIGGER fail_named_delete BEFORE DELETE ON photos WHEN OLD.name = 'fail-delete.jpg' BEGIN SELECT RAISE(ABORT, 'forced failure'); END");
+    return $pdo;
+};
+$pid = static fn (int $n): string => sprintf('aaaaaaaa-0000-4000-8000-%012d', $n);
+$adminMedia = realpath(tempDir());
+$adminLogs = tempDir();
+$adminLogger = new Logger($adminLogs, 'smoke-admin');
+
+/** Inserts a photo row and (by default) its two files. Returns [storage_path, thumb_path]. */
+$addPhoto = static function (PDO $pdo, string $id, array $opt = []) use ($fx, &$adminMedia): array {
+    $root = $opt['root'] ?? $adminMedia;
+    $full = $opt['storage_path'] ?? "uploads/$id.webp";
+    $thumb = array_key_exists('thumb_path', $opt) ? $opt['thumb_path'] : "uploads/thumbs/$id.webp";
+    foreach ([[$full, $opt['write_full'] ?? true, 'full-c.webp'], [$thumb, $opt['write_thumb'] ?? true, 'thumb-c.webp']] as [$path, $write, $fixture]) {
+        if ($path !== null && $write) {
+            @mkdir(dirname("$root/$path"), 0700, true);
+            copy($fx[$fixture], "$root/$path");
+        }
+    }
+    $pdo->prepare('INSERT INTO photos (id, name, storage_path, category, title, location, `date`, created_at, thumb_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        ->execute([$id, $opt['name'] ?? "$id.jpg", $full, $opt['category'] ?? 'natur', 'Titel', 'Ort', '2026-01-02', '2026-01-01 00:00:00.000000', $thumb]);
+    return [$full, $thumb];
+};
+$photoRow = static function (PDO $pdo, string $id): array|false {
+    $statement = $pdo->prepare('SELECT category, location, `date`, title FROM photos WHERE id = ?');
+    $statement->execute([$id]);
+    return $statement->fetch();
+};
+$rowCount = static fn (PDO $pdo, string $table): int => (int) $pdo->query("SELECT COUNT(*) FROM $table")->fetchColumn();
+
+echo "\nAdmin: photo update (SQLite)\n";
+
+$pdo = $adminDb();
+$photoAdmin = new PhotoAdmin($pdo, new MediaStore($adminMedia), $adminLogger);
+$addPhoto($pdo, $pid(1), ['write_full' => false, 'thumb_path' => null]);
+
+$photoAdmin->update($pid(1), 'porträtt', 'Alingsås', '2026-09-01');
+check('valid update sets category, location and date; title untouched',
+    $photoRow($pdo, $pid(1)) === ['category' => 'porträtt', 'location' => 'Alingsås', 'date' => '2026-09-01', 'title' => 'Titel'], json_encode($photoRow($pdo, $pid(1))));
+$photoAdmin->update($pid(1), 'okategoriserad', null, null);
+check('okategoriserad is a valid target; null clears location and date',
+    $photoRow($pdo, $pid(1)) === ['category' => 'okategoriserad', 'location' => null, 'date' => null, 'title' => 'Titel']);
+$beforeRow = $photoRow($pdo, $pid(1));
+check('unknown category → 422 unknown_category, row unchanged',
+    $outcome(fn () => $photoAdmin->update($pid(1), 'finns-inte', 'x', null)) === ['http' => 422, 'code' => 'unknown_category'] && $photoRow($pdo, $pid(1)) === $beforeRow);
+check('category key differing only in case → 422 (keys are exact)',
+    $outcome(fn () => $photoAdmin->update($pid(1), 'Natur', null, null)) === ['http' => 422, 'code' => 'unknown_category']);
+check('missing photo → 404 not_found', $outcome(fn () => $photoAdmin->update($pid(99), 'natur', null, null)) === ['http' => 404, 'code' => 'not_found']);
+$pdo->exec("INSERT INTO fail_on VALUES ('photo-update')");
+check('database failure during the update → error, row unchanged, transaction closed',
+    is_string($outcome(fn () => $photoAdmin->update($pid(1), 'natur', 'Ny ort', '2026-01-01'))) && $photoRow($pdo, $pid(1)) === $beforeRow && !$pdo->inTransaction());
+$pdo->exec('DELETE FROM fail_on');
+check('no media files were touched by updates', $tree($adminMedia) === []);
+
+echo "\nAdmin: photo delete (SQLite + temporary media)\n";
+
+// Media that must survive every deletion test.
+mkdir($adminMedia . '/hero', 0700, true);
+mkdir($adminMedia . '/uploads/thumbs', 0700, true);
+copy($fx['full-c.webp'], $adminMedia . '/hero/current.webp');
+copy($fx['full-c.webp'], $adminMedia . '/hero/other.webp');
+copy($fx['full-a.webp'], $adminMedia . '/uploads/unrelated.webp');
+copy($fx['thumb-a.webp'], $adminMedia . '/uploads/thumbs/unrelated.webp');
+file_put_contents($adminMedia . '/uploads/.htaccess', "# must survive\n");
+$outsideDir = realpath(tempDir());
+file_put_contents($outsideDir . '/outside.webp', 'outside MEDIA_DIR');
+$pdo->exec("INSERT INTO site_settings VALUES ('hero_image_path', 'hero/current.webp', NULL)");
+$protected = $tree($adminMedia);
+$exists = static fn (string $relative): bool => file_exists($adminMedia . '/' . $relative);
+$deleteCount = static function (PDO $pdo, string $id): int {
+    $statement = $pdo->prepare('SELECT COUNT(*) FROM photos WHERE id = ?');
+    $statement->execute([$id]);
+    return (int) $statement->fetchColumn();
+};
+
+[$f, $t] = $addPhoto($pdo, $pid(10));
+$r = $photoAdmin->delete([$pid(10)]);
+check('delete removes the row', $r['deleted'] === [$pid(10)] && $deleteCount($pdo, $pid(10)) === 0);
+check('… and the full image and thumbnail', !$exists($f) && !$exists($t) && $r['files']['deleted'] === 2, json_encode($r['files']));
+
+[$f] = $addPhoto($pdo, $pid(11), ['thumb_path' => null]);
+$r = $photoAdmin->delete([$pid(11)]);
+check('photo without a thumbnail: row and full image removed', $deleteCount($pdo, $pid(11)) === 0 && !$exists($f) && $r['files'] === ['deleted' => 1, 'missing' => 0, 'refused' => 0, 'failed' => 0, 'kept' => 0]);
+
+[$f, $t] = $addPhoto($pdo, $pid(12), ['write_full' => false]);
+$r = $photoAdmin->delete([$pid(12)]);
+check('full image already missing: row still deleted, thumbnail removed', $deleteCount($pdo, $pid(12)) === 0 && !$exists($t) && $r['files']['missing'] === 1 && $r['files']['deleted'] === 1);
+
+[$f, $t] = $addPhoto($pdo, $pid(13), ['write_thumb' => false]);
+$r = $photoAdmin->delete([$pid(13)]);
+check('thumbnail missing: row still deleted, full image removed', $deleteCount($pdo, $pid(13)) === 0 && !$exists($f) && $r['files']['missing'] === 1);
+
+$badPaths = [
+    14 => ['hero/other.webp', 'uploads/unrelated.webp'],          // real files, wrong kind
+    15 => ['uploads/.htaccess', 'uploads/thumbs/../../hero/other.webp'],
+    16 => ['../' . basename($outsideDir) . '/outside.webp', '/etc/passwd'],
+    17 => ['uploads/thumbs/unrelated.webp', 'uploads\\thumbs\\unrelated.webp'],
+];
+foreach ($badPaths as $n => [$full, $thumb]) {
+    $addPhoto($pdo, $pid($n), ['storage_path' => $full, 'thumb_path' => $thumb, 'write_full' => false, 'write_thumb' => false]);
+}
+$r = $photoAdmin->delete(array_map($pid, array_keys($badPaths)));
+check('invalid stored paths: rows deleted (logical delete is not blocked)', count($r['deleted']) === 4 && $rowCount($pdo, 'photos') === 1);
+check('… no file outside the managed shape was touched', $tree($adminMedia) === $protected && is_file($outsideDir . '/outside.webp') && $r['files']['refused'] === 8, json_encode($r['files']));
+check('… and each refusal is logged', substr_count(readLogs($adminLogs), 'Stored path is not a managed file') === 8);
+
+$failingStore = new MediaStore($adminMedia, null, static fn (string $path): bool => false);
+[$f, $t] = $addPhoto($pdo, $pid(18));
+$r = (new PhotoAdmin($pdo, $failingStore, $adminLogger))->delete([$pid(18)]);
+check('unlink failure after commit: row stays deleted', $r['deleted'] === [$pid(18)] && $deleteCount($pdo, $pid(18)) === 0);
+check('… files left as orphans and logged', $exists($f) && $exists($t) && $r['files']['failed'] === 2 && str_contains(readLogs($adminLogs), 'Orphan media file'));
+unlink($adminMedia . '/' . $f);
+unlink($adminMedia . '/' . $t);
+
+$addPhoto($pdo, $pid(19), ['thumb_path' => 'uploads/thumbs/shared.webp']);
+$addPhoto($pdo, $pid(20), ['thumb_path' => 'uploads/thumbs/shared.webp', 'write_thumb' => false]);
+$r = $photoAdmin->delete([$pid(19)]);
+check('a file another row still references is kept', $exists('uploads/thumbs/shared.webp') && $r['files']['kept'] === 1);
+$r = $photoAdmin->delete([$pid(20)]);
+check('… and removed with the last reference', !$exists('uploads/thumbs/shared.webp') && $r['files']['deleted'] === 2);
+
+$addPhoto($pdo, $pid(21), ['storage_path' => 'hero/current.webp', 'write_full' => false, 'thumb_path' => null]);
+$r = $photoAdmin->delete([$pid(21)]);
+check('a path that is the current hero setting is never deleted', $exists('hero/current.webp') && $r['files']['kept'] === 1);
+
+$before = $tree($adminMedia);
+$r = $photoAdmin->delete([$pid(99)]);
+check('missing photo: nothing deleted, reported as not found', $r['deleted'] === [] && $r['notFound'] === [$pid(99)] && $tree($adminMedia) === $before);
+check('only the test photos’ own files were ever removed', $tree($adminMedia) === $protected);
+
+echo "\nAdmin: bulk delete (SQLite + temporary media)\n";
+
+$pdo = $adminDb();
+$pdo->exec("INSERT INTO site_settings VALUES ('hero_image_path', 'hero/current.webp', NULL)");
+$bulkAdmin = new PhotoAdmin($pdo, new MediaStore($adminMedia), $adminLogger);
+$addPhoto($pdo, $pid(29), ['write_full' => false, 'write_thumb' => false, 'storage_path' => 'uploads/keep-me.webp', 'thumb_path' => null]);
+
+$addPhoto($pdo, $pid(30));
+$r = $bulkAdmin->delete([$pid(30)]);
+check('one photo', $r['deleted'] === [$pid(30)] && $r['files']['deleted'] === 2);
+
+[$f31, $t31] = $addPhoto($pdo, $pid(31));
+[$f32] = $addPhoto($pdo, $pid(32), ['thumb_path' => null]);
+[$f33, $t33] = $addPhoto($pdo, $pid(33), ['write_full' => false]);
+$pdo->transactions = 0;
+$r = $bulkAdmin->delete([$pid(31), $pid(98), $pid(32), $pid(33)]);
+check('several photos with and without thumbnails, one unknown ID: found ones deleted in request order',
+    $r['deleted'] === [$pid(31), $pid(32), $pid(33)] && $r['notFound'] === [$pid(98)], json_encode($r));
+check('… in exactly one transaction', $pdo->transactions === 1, (string) $pdo->transactions);
+check('… files: 4 removed, 1 already missing', $r['files']['deleted'] === 4 && $r['files']['missing'] === 1 && !$exists($f31) && !$exists($t31) && !$exists($f32) && !$exists($t33));
+check('… unrelated row kept', $deleteCount($pdo, $pid(29)) === 1);
+
+$addPhoto($pdo, $pid(40));
+$addPhoto($pdo, $pid(41), ['name' => 'fail-delete.jpg']);
+$addPhoto($pdo, $pid(42));
+$beforeFiles = $tree($adminMedia);
+$r = $outcome(fn () => $bulkAdmin->delete([$pid(40), $pid(41), $pid(42)]));
+check('SQL failure on one row → error', is_string($r), json_encode($r));
+check('… every row of the batch is still there (rolled back)', $deleteCount($pdo, $pid(40)) + $deleteCount($pdo, $pid(41)) + $deleteCount($pdo, $pid(42)) === 3 && !$pdo->inTransaction());
+check('… and no file was removed', $tree($adminMedia) === $beforeFiles);
+$pdo->exec("UPDATE photos SET name = 'ok.jpg' WHERE name = 'fail-delete.jpg'");
+$bulkAdmin->delete([$pid(40), $pid(41), $pid(42)]);
+
+[$f50, $t50] = $addPhoto($pdo, $pid(50));
+[$f51, $t51] = $addPhoto($pdo, $pid(51));
+$r = (new PhotoAdmin($pdo, $failingStore, $adminLogger))->delete([$pid(50), $pid(51)]);
+check('filesystem failure after commit: rows deleted, files orphaned', $r['deleted'] === [$pid(50), $pid(51)] && $deleteCount($pdo, $pid(50)) + $deleteCount($pdo, $pid(51)) === 0 && $exists($f50) && $exists($t51) && $r['files']['failed'] === 4);
+foreach ([$f50, $t50, $f51, $t51] as $orphan) {
+    unlink($adminMedia . '/' . $orphan);
+}
+check('none of the IDs exist → nothing deleted', $bulkAdmin->delete([$pid(97), $pid(96)])['deleted'] === []);
+check('clean final state: only the unrelated row and the protected media', $rowCount($pdo, 'photos') === 1 && $tree($adminMedia) === $protected);
+
+echo "\nAdmin: categories (SQLite)\n";
+
+foreach ([
+    'Porträtt' => 'porträtt',
+    'Modelfoto / Fashion' => 'modelfoto-fashion',
+    'Höst  på   Öland' => 'höst-på-öland',
+    'ÅÄÖ åäö' => 'åäö-åäö',
+    'Café Noir' => 'caf-noir',
+    '--Bröllop--' => 'bröllop',
+    'Bil & Motor 2026' => 'bil-motor-2026',
+    "Natt\u{00A0}foto" => 'natt-foto',
+] as $label => $key) {
+    check("key for \"$label\" is \"$key\"", CategoryAdmin::keyFor($label) === $key, CategoryAdmin::keyFor($label));
+}
+
+$pdo = $adminDb();
+$categories = new CategoryAdmin($pdo, $adminLogger, $fixedClock);
+$created = $categories->create('  Höst på Öland  ');
+check('Swedish label creates a category (trimmed label, generated key)',
+    $created['key'] === 'höst-på-öland' && $created['label'] === 'Höst på Öland' && (bool) preg_match($uuidRe, $created['id']) && $created['created_at'] === '2026-06-14T20:40:36.000000Z', json_encode($created));
+$stored = $pdo->query("SELECT created_at FROM categories WHERE `key` = 'höst-på-öland'")->fetchColumn();
+check('… created_at stored as UTC with microseconds', $stored === '2026-06-14 20:40:36.000000');
+$decomposed = $categories->create("Fja\u{0308}ll");
+check('decomposed input is stored NFC ("fjäll" = 66 6a c3 a4 6c 6c)', bin2hex($decomposed['key']) === '666ac3a46c6c' && $decomposed['label'] === "Fj\u{00E4}ll");
+$conflict = ['http' => 409, 'code' => 'category_exists'];
+check('NFC and decomposed spellings are the same category → 409', $outcome(fn () => $categories->create("Fj\u{00E4}ll")) === $conflict);
+check('existing key in another case ("NATUR") → 409', $outcome(fn () => $categories->create('NATUR')) === $conflict);
+check('existing Swedish key ("PORTRÄTT") → 409', $outcome(fn () => $categories->create('PORTRÄTT')) === $conflict);
+check('different label, same generated key ("Natur!") → 409', $outcome(fn () => $categories->create('Natur!')) === $conflict);
+check('reserved "Okategoriserad" → 409 reserved_category', $outcome(fn () => $categories->create(' Okategoriserad ')) === ['http' => 409, 'code' => 'reserved_category']);
+check('whitespace only → 400', $outcome(fn () => $categories->create("  \t ")) === $bad);
+check('one character after trimming → 400', $outcome(fn () => $categories->create('  Ö  ')) === $bad);
+check('41 characters → 400', $outcome(fn () => $categories->create(str_repeat('ö', 41))) === $bad);
+check('40 Swedish characters accepted', $categories->create(str_repeat('ä', 40))['key'] === str_repeat('ä', 40));
+check('control character → 400', $outcome(fn () => $categories->create("Natt\x07bild")) === $bad && $outcome(fn () => $categories->create("Ny\nrad")) === $bad);
+check('zero-width space → 400', $outcome(fn () => $categories->create("Natt\u{200B}bild")) === $bad);
+check('bidirectional override → 400', $outcome(fn () => $categories->create("\u{202E}Natur")) === $bad);
+check('symbols only (empty key) → 400', $outcome(fn () => $categories->create('!!! ???')) === $bad);
+check('label as a number or array → 400', $outcome(fn () => $categories->create(42)) === $bad && $outcome(fn () => $categories->create(['Natur'])) === $bad);
+check('invalid UTF-8 → 400', $outcome(fn () => $categories->create("Ab\xC3\x28")) === $bad);
+$noIntl = new CategoryAdmin($pdo, $adminLogger, $fixedClock, false);
+$countBefore = $rowCount($pdo, 'categories');
+check('without intl: decomposed input → 400, nothing stored', $outcome(fn () => $noIntl->create("Sma\u{030A}land")) === $bad && $rowCount($pdo, 'categories') === $countBefore);
+check('without intl: precomposed Swedish label works', $noIntl->create('Småland')['key'] === 'småland');
+check('only valid categories were stored', $rowCount($pdo, 'categories') === 4 + 4);
+
+echo "\nAdmin: category delete (SQLite)\n";
+
+$beforeMedia = $tree($adminMedia);
+$r = $categories->delete('höst-på-öland');
+check('unused category deleted, 0 photos reassigned', $r === ['key' => 'höst-på-öland', 'label' => 'Höst på Öland', 'reassignedPhotos' => 0]);
+foreach ([60, 61, 62] as $n) {
+    $addPhoto($pdo, $pid($n), ['category' => 'porträtt', 'write_full' => false, 'thumb_path' => null]);
+}
+$addPhoto($pdo, $pid(63), ['category' => 'natur', 'write_full' => false, 'thumb_path' => null]);
+$r = $categories->delete('porträtt');
+check('category with 3 photos: deleted, 3 reassigned', $r['reassignedPhotos'] === 3 && $pdo->query("SELECT COUNT(*) FROM categories WHERE `key` = 'porträtt'")->fetchColumn() == 0);
+check('… photos moved to okategoriserad, other photos untouched',
+    $photoRow($pdo, $pid(60))['category'] === 'okategoriserad' && $photoRow($pdo, $pid(62))['category'] === 'okategoriserad' && $photoRow($pdo, $pid(63))['category'] === 'natur');
+check('… no media file changed', $tree($adminMedia) === $beforeMedia);
+check('okategoriserad can never be deleted → 409', $outcome(fn () => $categories->delete('okategoriserad')) === ['http' => 409, 'code' => 'protected_category']);
+check('missing category → 404', $outcome(fn () => $categories->delete('finns-inte')) === ['http' => 404, 'code' => 'not_found']);
+check('key is exact (case) → 404', $outcome(fn () => $categories->delete('Natur')) === ['http' => 404, 'code' => 'not_found']);
+$categories->create('Fail Me');
+$addPhoto($pdo, $pid(64), ['category' => 'fail-me', 'write_full' => false, 'thumb_path' => null]);
+$addPhoto($pdo, $pid(65), ['category' => 'fail-me', 'write_full' => false, 'thumb_path' => null]);
+$pdo->exec("INSERT INTO fail_on VALUES ('category-delete')");
+check('failure between reassignment and delete → error', is_string($outcome(fn () => $categories->delete('fail-me'))));
+check('… rolled back: category still exists and photos keep it',
+    $pdo->query("SELECT COUNT(*) FROM categories WHERE `key` = 'fail-me'")->fetchColumn() == 1
+    && $photoRow($pdo, $pid(64))['category'] === 'fail-me' && $photoRow($pdo, $pid(65))['category'] === 'fail-me' && !$pdo->inTransaction());
+$pdo->exec('DELETE FROM fail_on');
+check('… succeeds once the failure is gone', $categories->delete('fail-me')['reassignedPhotos'] === 2);
+check('foreign key RESTRICT: a category with photos cannot be deleted directly',
+    is_string($outcome(fn () => $pdo->exec("DELETE FROM categories WHERE `key` = 'natur'"))));
+
+echo "\nAdmin: hero replacement (SQLite + temporary media)\n";
+
+$heroRoot = realpath(tempDir());
+mkdir($heroRoot . '/hero', 0700, true);
+mkdir($heroRoot . '/uploads/thumbs', 0700, true);
+copy($fx['hero-b.webp'], $heroRoot . '/hero/old-hero.webp');
+copy($fx['full-a.webp'], $heroRoot . '/uploads/photo.webp');
+file_put_contents($heroRoot . '/hero/.htaccess', "# must survive\n");
+$hpdo = $adminDb();
+$hpdo->exec("INSERT INTO site_settings VALUES ('hero_image_path', 'hero/old-hero.webp', '2026-01-01 00:00:00.000000')");
+$heroConfig = UploadConfig::create($heroRoot, 15 * 1024 * 1024, 20, 500 * 1024 * 1024);
+$heroFile = static function (string $name) use ($fx, $work): array {
+    $tmp = $work . '/hero-' . bin2hex(random_bytes(4)) . '.tmp';
+    copy($fx[$name], $tmp);
+    return ['tmp' => $tmp, 'size' => filesize($tmp)];
+};
+$setting = static fn (PDO $pdo): string|false|null => $pdo->query("SELECT value FROM site_settings WHERE `key` = 'hero_image_path'")->fetchColumn();
+$runHero = static function (PDO $pdo, array $file, array $opt = []) use (&$heroConfig, $adminLogger, $copyMover, $fixedClock): array {
+    $config = $opt['config'] ?? $heroConfig;
+    $uploader = new HeroUploader($pdo, new MediaStore($config->mediaDir, null, $opt['unlinker'] ?? null), $config, $adminLogger, $copyMover, $fixedClock);
+    try {
+        return $uploader->replace($file);
+    } catch (HttpException $e) {
+        return ['http' => $e->status, 'code' => $e->errorCode];
+    } catch (Throwable $e) {
+        return ['error' => get_class($e)];
+    }
+};
+$heroRe = '#^hero/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.webp$#';
+$photoHash = hash_file('sha256', $heroRoot . '/uploads/photo.webp');
+
+$r = $runHero($hpdo, $heroFile('hero-max.webp'));
+check('valid 2560 px hero → stored under a new hero/<uuid>.webp', (bool) preg_match($heroRe, $r['path'] ?? '') && $r['width'] === 2560 && $r['height'] === 1440, json_encode($r));
+check('… file identical to the upload, setting points at it', hash_file('sha256', $heroRoot . '/' . $r['path']) === hash_file('sha256', $fx['hero-max.webp']) && $setting($hpdo) === $r['path']);
+check('… previous hero file deleted after the commit', !file_exists($heroRoot . '/hero/old-hero.webp'));
+check('… gallery photo and other files untouched', hash_file('sha256', $heroRoot . '/uploads/photo.webp') === $photoHash && is_file($heroRoot . '/hero/.htaccess'));
+$updatedAt = $hpdo->query("SELECT updated_at FROM site_settings WHERE `key` = 'hero_image_path'")->fetchColumn();
+check('… updated_at in UTC with microseconds', $updatedAt === '2026-06-14 20:40:36.000000');
+
+$current = $setting($hpdo);
+$r = $runHero($hpdo, $heroFile('full-too-wide.webp'));
+check('the 2000 px gallery limit does not apply to the hero (2001 px accepted)', isset($r['path']) && $setting($hpdo) === $r['path'] && !file_exists($heroRoot . '/' . $current));
+
+$before = [$tree($heroRoot), $setting($hpdo)];
+foreach ([
+    'JPEG renamed .webp → 422 invalid_image' => ['jpeg-renamed.webp', ['http' => 422, 'code' => 'invalid_image']],
+    'SVG renamed .webp → 422 invalid_image' => ['svg-renamed.webp', ['http' => 422, 'code' => 'invalid_image']],
+    'WebP header + PHP polyglot → 422 invalid_image' => ['header-polyglot.webp', ['http' => 422, 'code' => 'invalid_image']],
+    '2561 px wide → 422 image_dimensions' => ['hero-too-wide.webp', ['http' => 422, 'code' => 'image_dimensions']],
+] as $label => [$fixture, $expected]) {
+    $r = $runHero($hpdo, $heroFile($fixture));
+    check("$label, nothing changed", $r === $expected && [$tree($heroRoot), $setting($hpdo)] === $before, json_encode($r));
+}
+
+$hpdo->exec("INSERT INTO fail_on VALUES ('hero-update')");
+$r = $runHero($hpdo, $heroFile('hero-b.webp'));
+check('DB failure after the new file was written → error', isset($r['error']), json_encode($r));
+check('… new file removed, old hero file and setting untouched, transaction closed', [$tree($heroRoot), $setting($hpdo)] === $before && !$hpdo->inTransaction());
+$hpdo->exec('DELETE FROM fail_on');
+
+// No setting row yet: inserted (and an insert failure also cleans up).
+$hpdo->exec("DELETE FROM site_settings WHERE `key` = 'hero_image_path'");
+$orphanCurrent = $before[1];
+$hpdo->exec("INSERT INTO fail_on VALUES ('hero-insert')");
+$beforeInsert = $tree($heroRoot);
+$r = $runHero($hpdo, $heroFile('hero-b.webp'));
+check('no setting yet + insert failure → error, no row, new file removed', isset($r['error']) && $setting($hpdo) === false && $tree($heroRoot) === $beforeInsert);
+$hpdo->exec('DELETE FROM fail_on');
+$r = $runHero($hpdo, $heroFile('hero-b.webp'));
+check('no setting yet → setting row inserted', isset($r['path']) && $setting($hpdo) === $r['path'] && is_file($heroRoot . '/' . $r['path']));
+unlink($heroRoot . '/' . $orphanCurrent); // the file the deleted row pointed at
+
+$hpdo->prepare("UPDATE site_settings SET value = ? WHERE `key` = 'hero_image_path'")->execute(['hero/gone.webp']);
+$r = $runHero($hpdo, $heroFile('hero-b.webp'));
+check('old hero already missing from disk → success', isset($r['path']) && $setting($hpdo) === $r['path'] && str_contains(readLogs($adminLogs), 'Previous hero file was already missing'));
+
+$current = $setting($hpdo);
+$r = $runHero($hpdo, $heroFile('hero-max.webp'), ['unlinker' => static fn (string $path): bool => false]);
+check('old hero cannot be deleted → success, new hero authoritative', isset($r['path']) && $setting($hpdo) === $r['path'] && is_file($heroRoot . '/' . $r['path']));
+check('… old file left as a logged orphan', is_file($heroRoot . '/' . $current) && str_contains(readLogs($adminLogs), 'could not delete the previous hero'));
+unlink($heroRoot . '/' . $current);
+
+file_put_contents(dirname($heroRoot) . '/pixelmani-smoke-sentinel.webp', 'outside MEDIA_DIR');
+foreach ([
+    '../pixelmani-smoke-sentinel.webp',
+    'uploads/photo.webp',
+    'hero/.htaccess',
+    'hero/../uploads/photo.webp',
+    'hero/sub/x.webp',
+    'C:/Windows/win.ini',
+] as $malicious) {
+    $hpdo->prepare("UPDATE site_settings SET value = ? WHERE `key` = 'hero_image_path'")->execute([$malicious]);
+    $before = $tree($heroRoot);
+    $r = $runHero($hpdo, $heroFile('hero-b.webp'));
+    $new = $r['path'] ?? '';
+    $expected = $before + [$new => hash_file('sha256', $fx['hero-b.webp'])];
+    ksort($expected);
+    check("malicious old setting \"$malicious\": replaced, nothing else deleted",
+        $setting($hpdo) === $new && $tree($heroRoot) === $expected && is_file(dirname($heroRoot) . '/pixelmani-smoke-sentinel.webp'), json_encode($r));
+    unlink($heroRoot . '/' . $new);
+}
+unlink(dirname($heroRoot) . '/pixelmani-smoke-sentinel.webp');
+check('… every refusal is logged', substr_count(readLogs($adminLogs), 'Previous hero path is not a managed hero file') === 6);
+
+// Quota: managed media − the current hero + the new hero must fit.
+copy($fx['hero-max.webp'], $heroRoot . '/hero/quota-current.webp');
+$hpdo->prepare("UPDATE site_settings SET value = ? WHERE `key` = 'hero_image_path'")->execute(['hero/quota-current.webp']);
+$used = (new MediaStore($heroRoot))->usedBytes();
+$fit = $used - filesize($fx['hero-max.webp']) + filesize($fx['hero-b.webp']);
+$before = [$tree($heroRoot), $setting($hpdo)];
+$r = $runHero($hpdo, $heroFile('hero-b.webp'), ['config' => UploadConfig::create($heroRoot, 15 * 1024 * 1024, 20, $fit - 1)]);
+check('quota one byte short (old hero subtracted) → 507, nothing changed', $r === ['http' => 507, 'code' => 'quota_exceeded'] && [$tree($heroRoot), $setting($hpdo)] === $before, json_encode($r));
+$r = $runHero($hpdo, $heroFile('hero-b.webp'), ['config' => UploadConfig::create($heroRoot, 15 * 1024 * 1024, 20, $fit)]);
+check('exact fit after subtracting the replaced hero → success', isset($r['path']) && !is_file($heroRoot . '/hero/quota-current.webp'));
+check('after every success the setting points at an existing file', is_file($heroRoot . '/' . $setting($hpdo)));
+
+// Request parsing: exactly one file in "file".
+$heroField = static function (string $fixture, int $error = UPLOAD_ERR_OK) use ($fx, $work): array {
+    $tmp = $work . '/hf-' . bin2hex(random_bytes(4)) . '.tmp';
+    copy($fx[$fixture], $tmp);
+    return ['name' => 'Landning.jpg', 'type' => 'image/webp', 'tmp_name' => $tmp, 'error' => $error, 'size' => filesize($tmp)];
+};
+$parseHero = static function (array $post, array $files, array $server = [], ?UploadConfig $config = null, bool $requireUploaded = false) use ($multipart, &$heroConfig, $outcome): array|string|null {
+    $result = null;
+    $outcomeValue = $outcome(function () use (&$result, $post, $files, $server, $config, $requireUploaded, $multipart, $heroConfig) {
+        $result = HeroUploader::fileFromRequest($post, $files, $server + $multipart, $config ?? $heroConfig, $requireUploaded, 1_000_000);
+    });
+    return $outcomeValue ?? (is_array($result) ? 'ok' : null);
+};
+check('one file → accepted', $parseHero([], ['file' => $heroField('hero-b.webp')]) === 'ok');
+check('missing file → 400', $parseHero([], []) === $bad);
+check('file[] (several files) → 400', $parseHero([], ['file' => ['name' => ['a', 'b'], 'type' => ['x', 'x'], 'tmp_name' => ['a', 'b'], 'error' => [0, 0], 'size' => [1, 1]]]) === $bad);
+check('extra file field → 400', $parseHero([], ['file' => $heroField('hero-b.webp'), 'thumbnail' => $heroField('thumb-a.webp')]) === $bad);
+check('extra form field (client path) → 400', $parseHero(['path' => 'hero/x.webp'], ['file' => $heroField('hero-b.webp')]) === $bad);
+check('not multipart → 400', $parseHero([], ['file' => $heroField('hero-b.webp')], ['CONTENT_TYPE' => 'application/json']) === $bad);
+check('over MAX_UPLOAD_BYTES → 413 file_too_large', $parseHero([], ['file' => $heroField('hero-b.webp')], [], UploadConfig::create($heroRoot, 4_000, 20, 500 * 1024 * 1024)) === ['http' => 413, 'code' => 'file_too_large']);
+check('UPLOAD_ERR_INI_SIZE → 413', $parseHero([], ['file' => $heroField('hero-b.webp', UPLOAD_ERR_INI_SIZE)]) === ['http' => 413, 'code' => 'file_too_large']);
+check('body over post_max_size → 413 request_too_large', $parseHero([], [], ['CONTENT_LENGTH' => '2000000']) === ['http' => 413, 'code' => 'request_too_large']);
+check('zero-byte file → 422', $parseHero([], ['file' => $heroField('empty.webp')]) === ['http' => 422, 'code' => 'invalid_image']);
+check('file not uploaded through HTTP → 400 (is_uploaded_file)', $parseHero([], ['file' => $heroField('hero-b.webp')], [], null, true) === $bad);
+removeTree($heroRoot);
+
+echo "\nAdmin: storage usage (isolated media tree)\n";
+
+$usageRoot = realpath(tempDir());
+foreach (['uploads/thumbs', 'uploads/nested/deeper', 'hero', 'other'] as $directory) {
+    mkdir("$usageRoot/$directory", 0700, true);
+}
+$sizes = ['uploads/a.webp' => 1_572_864, 'uploads/thumbs/a.webp' => 61_440, 'hero/h.webp' => 700_001, 'uploads/nested/deeper/x.webp' => 7];
+foreach ($sizes as $path => $bytes) {
+    file_put_contents("$usageRoot/$path", str_repeat('x', $bytes));
+}
+file_put_contents("$usageRoot/.htaccess", str_repeat('x', 50));            // not managed media
+file_put_contents("$usageRoot/other/stray.bin", str_repeat('x', 999));     // not managed media
+$usageOutside = tempDir();
+file_put_contents("$usageOutside/private.log", str_repeat('x', 5_000_000)); // outside MEDIA_DIR
+$usage = (new MediaStore($usageRoot))->usage();
+$sum = array_sum($sizes);
+check('full photo, thumbnail, hero and nested managed files counted, exact bytes', $usage === ['bytes' => $sum, 'files' => 4], json_encode($usage));
+check('… files outside uploads/ and hero/ (and outside MEDIA_DIR) not counted', (new MediaStore($usageRoot))->usedBytes() === $sum);
+$report = MediaStore::usageReport($usage, 4 * 1048576);
+check('report: total, quota and remaining figures', $report === [
+    'total_bytes' => $sum, 'total_mb' => round($sum / 1048576, 2), 'file_count' => 4,
+    'quota_bytes' => 4_194_304, 'quota_mb' => 4.0, 'remaining_bytes' => 4_194_304 - $sum, 'remaining_mb' => round((4_194_304 - $sum) / 1048576, 2),
+], json_encode($report));
+$over = MediaStore::usageReport(['bytes' => 3_000_000, 'files' => 1], 2_097_152);
+check('over quota: remaining is 0, never negative', $over['remaining_bytes'] === 0 && $over['remaining_mb'] === 0.0);
+check('empty MEDIA_DIR (no uploads/ or hero/) → 0 bytes, 0 files', (new MediaStore(realpath($usageOutside)))->usage() === ['bytes' => 0, 'files' => 0]);
+check('report never contains a filesystem path', !str_contains(json_encode($report), str_replace('\\', '/', $usageRoot)) && !str_contains(json_encode($report), 'uploads'));
+removeTree($usageRoot);
+removeTree($usageOutside);
+
+echo "\nAdmin: real MySQL (runtime user; every change undone)\n";
+
+try {
+    $config = Config::load(dirname(__DIR__), dirname(__DIR__, 2));
+    $mysql = (new Database($config, new Logger(sys_get_temp_dir(), 'smoke')))->pdo();
+    $myCatalog = new PublicCatalog($mysql, new PublicUrls('http://x', '/media'));
+    $snapshot = static fn (): string => json_encode([$myCatalog->photos(), $myCatalog->adminCategories(), $myCatalog->heroPath()]);
+    $snapshotBefore = $snapshot();
+    $myCategories = new CategoryAdmin($mysql, $adminLogger);
+    $tempPhotoIds = [];
+
+    try {
+        $c = $myCategories->create('Smoke Ärtor Öl');
+        $hex = $mysql->prepare('SELECT HEX(`key`) FROM categories WHERE `key` = ?');
+        $hex->execute([$c['key']]);
+        check('MySQL: Swedish key stored as UTF-8 bytes', $c['key'] === 'smoke-ärtor-öl' && strtolower((string) $hex->fetchColumn()) === bin2hex('smoke-ärtor-öl'));
+        check('MySQL: same label in upper case → 409', $outcome(fn () => $myCategories->create('SMOKE ÄRTOR ÖL')) === ['http' => 409, 'code' => 'category_exists']);
+        $d = $myCategories->create("Smoke Fja\u{0308}ll");
+        check('MySQL: decomposed input stored NFC', bin2hex($d['key']) === bin2hex("smoke-fj\u{00E4}ll"));
+        $listed = array_column($myCatalog->adminCategories(), 'key');
+        check('MySQL: admin category list includes okategoriserad and the new keys', in_array('okategoriserad', $listed, true) && in_array('smoke-ärtor-öl', $listed, true));
+        check('MySQL: public category list still hides okategoriserad', !in_array('okategoriserad', array_column($myCatalog->categories(), 'key'), true));
+
+        foreach ([1, 2] as $n) {
+            $id = MediaStore::uuid4();
+            $tempPhotoIds[] = $id;
+            $mysql->prepare("INSERT INTO photos (id, name, storage_path, category, created_at) VALUES (?, 'smoke.jpg', ?, ?, UTC_TIMESTAMP(6))")
+                ->execute([$id, "uploads/smoke-$id.webp", $c['key']]);
+        }
+        $direct = $outcome(fn () => $mysql->prepare('DELETE FROM categories WHERE `key` = ?')->execute([$c['key']]));
+        check('MySQL: FK RESTRICT blocks deleting a category that has photos', $direct === PDOException::class);
+        $r = $myCategories->delete($c['key']);
+        check('MySQL: delete reassigns 2 photos, then deletes (FOR UPDATE + transaction)', $r['reassignedPhotos'] === 2);
+        $moved = $mysql->prepare('SELECT COUNT(*) FROM photos WHERE category = ? AND id IN (?, ?)');
+        $moved->execute(['okategoriserad', ...$tempPhotoIds]);
+        check('MySQL: … photos now in okategoriserad', (int) $moved->fetchColumn() === 2);
+
+        $myPhotos = new PhotoAdmin($mysql, new MediaStore($adminMedia), $adminLogger);
+        $myPhotos->update($tempPhotoIds[0], $d['key'], 'Göteborg', '2026-02-28');
+        $row = $mysql->prepare('SELECT category, location, `date` FROM photos WHERE id = ?');
+        $row->execute([$tempPhotoIds[0]]);
+        check('MySQL: photo update', $row->fetch() === ['category' => "smoke-fj\u{00E4}ll", 'location' => 'Göteborg', 'date' => '2026-02-28']);
+        $r = $myPhotos->delete([...$tempPhotoIds, '00000000-0000-4000-8000-00000000dead']);
+        check('MySQL: bulk delete of the temporary rows (files already absent)', count($r['deleted']) === 2 && $r['notFound'] === ['00000000-0000-4000-8000-00000000dead'] && $r['files']['missing'] === 2);
+        $tempPhotoIds = [];
+        $myCategories->delete($d['key']);
+
+        // Hero: exercises the MySQL FOR UPDATE path; the real setting is restored below.
+        $original = $mysql->query("SELECT value, updated_at FROM site_settings WHERE `key` = 'hero_image_path'")->fetch();
+        $myHeroRoot = realpath(tempDir());
+        try {
+            $myHero = new HeroUploader($mysql, new MediaStore($myHeroRoot), UploadConfig::create($myHeroRoot, 15 * 1024 * 1024, 20, 500 * 1024 * 1024), $adminLogger, $copyMover);
+            $r = $myHero->replace($heroFile('hero-b.webp'));
+            check('MySQL: hero setting switched inside a locked transaction', $myCatalog->heroPath() === $r['path'] && is_file($myHeroRoot . '/' . $r['path']));
+            check('MySQL: … the migrated hero file (not under this MEDIA_DIR) was not touched', is_file(dirname(__DIR__) . '/public/media/' . $original['value']));
+        } finally {
+            $mysql->prepare("UPDATE site_settings SET value = ?, updated_at = ? WHERE `key` = 'hero_image_path'")->execute([$original['value'], $original['updated_at']]);
+            removeTree($myHeroRoot);
+        }
+    } finally {
+        foreach ($tempPhotoIds as $id) {
+            $mysql->prepare('DELETE FROM photos WHERE id = ?')->execute([$id]);
+        }
+        $mysql->exec("DELETE FROM categories WHERE `key` LIKE 'smoke-%'");
+    }
+    check('MySQL: photos, categories and hero exactly as before', $snapshot() === $snapshotBefore);
+} catch (Throwable $e) {
+    check('MySQL admin checks', false, get_class($e) . ': ' . $e->getMessage());
+}
+
+removeTree($adminMedia);
+removeTree($adminLogs);
+removeTree($outsideDir);
 
 removeTree($mediaRoot);
 removeTree($work);

@@ -1,25 +1,36 @@
 /**
- * Browser-side preparation of a photo for the PHP upload endpoint
- * (POST /api/admin/photos/upload): one decode, two WebP variants.
+ * Browser-side preparation of images for the PHP admin endpoints.
  *
- *   full       max 2000 × 2000, quality 0.84 (same as the current admin upload)
- *   thumbnail  max  600 ×  600, quality 0.80
+ *   createImageVariants()     POST /api/admin/photos/upload: one decode, two WebP variants
+ *     full       max 2000 × 2000, quality 0.84 (same as the current admin upload)
+ *     thumbnail  max  600 ×  600, quality 0.80
+ *
+ *   createHeroImageVariant()  POST /api/admin/hero/upload: one WebP
+ *     hero       max 2560 × 2560, quality 0.88 (same as the current hero upload)
  *
  * Aspect ratio is kept and small images are never upscaled. The server
- * checks both variants against exactly these limits.
+ * checks every file against exactly these limits.
  *
  * Not used by the current admin yet; it still uses compressImage().
  */
 
 export const FULL_MAX_DIMENSION = 2000
 export const THUMB_MAX_DIMENSION = 600
+export const HERO_MAX_DIMENSION = 2560
 export const FULL_QUALITY = 0.84
 export const THUMB_QUALITY = 0.8
+export const HERO_QUALITY = 0.88
 
 export type ImageVariants = {
   full: File
   thumbnail: File
   /** Dimensions of the full variant. */
+  width: number
+  height: number
+}
+
+export type HeroImageVariant = {
+  file: File
   width: number
   height: number
 }
@@ -33,14 +44,10 @@ export class WebpEncodingUnsupportedError extends Error {
 }
 
 export async function createImageVariants(file: File): Promise<ImageVariants> {
-  if (!file.type.startsWith('image/')) {
-    throw new Error(`${file.name} is not an image`)
-  }
-
-  const bitmap = await createImageBitmap(file)
+  const bitmap = await decode(file)
 
   try {
-    const baseName = file.name.replace(/\.[^/.]+$/, '') || 'photo'
+    const baseName = baseNameOf(file)
     const full = await renderWebp(bitmap, FULL_MAX_DIMENSION, FULL_QUALITY, `${baseName}.webp`)
     const thumbnail = await renderWebp(bitmap, THUMB_MAX_DIMENSION, THUMB_QUALITY, `${baseName}-thumb.webp`)
 
@@ -48,6 +55,28 @@ export async function createImageVariants(file: File): Promise<ImageVariants> {
   } finally {
     bitmap.close()
   }
+}
+
+export async function createHeroImageVariant(file: File): Promise<HeroImageVariant> {
+  const bitmap = await decode(file)
+
+  try {
+    return await renderWebp(bitmap, HERO_MAX_DIMENSION, HERO_QUALITY, `${baseNameOf(file)}.webp`)
+  } finally {
+    bitmap.close()
+  }
+}
+
+async function decode(file: File): Promise<ImageBitmap> {
+  if (!file.type.startsWith('image/')) {
+    throw new Error(`${file.name} is not an image`)
+  }
+
+  return createImageBitmap(file)
+}
+
+function baseNameOf(file: File): string {
+  return file.name.replace(/\.[^/.]+$/, '') || 'photo'
 }
 
 async function renderWebp(

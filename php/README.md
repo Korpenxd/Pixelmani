@@ -6,10 +6,11 @@ current Next.js/Supabase site and is not used by it yet.
 
 So far it provides the foundation (configuration, database connection, JSON
 responses, method checks, error handling, logging, health check) and the
-public read-only API, admin authentication (login, session, logout) and the
-authenticated photo upload. There are no edit, delete, category, hero or
-contact endpoints yet. The live admin still uses the Next.js login and
-Supabase; these endpoints exist alongside it.
+public read-only API, admin authentication (login, session, logout), the
+authenticated photo upload and the rest of the admin backend: photo edits and
+deletion, categories, the hero image and storage usage. There is no contact
+endpoint yet. The live admin still uses the Next.js login and Supabase; these
+endpoints exist alongside it until the admin frontend is switched over.
 
 ## Layout
 
@@ -17,7 +18,9 @@ Supabase; these endpoints exist alongside it.
 php/
   bootstrap.php          loads classes, config, error handling; returns PixelMani\App
   src/                   Config, Database, JsonResponse, Http, Logger, ErrorHandler, App,
-                         PublicUrls (stored path → public URL), PublicCatalog (read queries)
+                         PublicUrls (stored path → public URL), PublicCatalog (read queries),
+                         Input (request validation), MediaStore (all media file writes/deletes),
+                         PhotoUploader, PhotoAdmin, CategoryAdmin, HeroUploader
   config/
     config.example.php   template for hosts without environment variables
     config.php           real config (gitignored, optional)
@@ -30,7 +33,15 @@ php/
     api/admin/login.php    POST /api/admin/login
     api/admin/session.php  GET  /api/admin/session
     api/admin/logout.php   POST /api/admin/logout
-    api/admin/photos/upload.php  POST /api/admin/photos/upload
+    api/admin/photos/upload.php       POST /api/admin/photos/upload
+    api/admin/photos/update.php       POST /api/admin/photos/update
+    api/admin/photos/delete.php       POST /api/admin/photos/delete
+    api/admin/photos/bulk-delete.php  POST /api/admin/photos/bulk-delete
+    api/admin/categories/list.php     GET  /api/admin/categories/list
+    api/admin/categories/create.php   POST /api/admin/categories/create
+    api/admin/categories/delete.php   POST /api/admin/categories/delete
+    api/admin/hero/upload.php         POST /api/admin/hero/upload
+    api/admin/storage-usage.php       GET  /api/admin/storage-usage
     media/               MEDIA_DIR locally: photo files (gitignored)
   storage/logs/          default log directory (gitignored)
   storage/sessions/      admin PHP sessions (gitignored)
@@ -64,7 +75,7 @@ layout keeps them outside it.
 | `MEDIA_DIR` | no | Filesystem directory served at `UPLOAD_URL_BASE`. Default `php/public` + `UPLOAD_URL_BASE`. Must exist and be writable. |
 | `MAX_UPLOAD_BYTES` | no | Per full-size image, default `15728640` (15 MiB). Thumbnails are capped at 2 MiB. |
 | `MAX_FILES_PER_REQUEST` | no | Photos per upload request, default `20` (1–100) |
-| `MEDIA_QUOTA_MB` | no | Total size of `MEDIA_DIR`, default `500` |
+| `MEDIA_QUOTA_MB` | no | Total size of the managed media (`MEDIA_DIR/uploads` and `MEDIA_DIR/hero`), default `500` |
 | `UPLOAD_URL_BASE` | no | Same-origin URL path for photo files, default `/media`. No scheme or host. |
 
 Sources, highest precedence first:
@@ -228,11 +239,11 @@ affects the public API.
 
 | Endpoint | Success | Errors |
 | --- | --- | --- |
-| `POST /api/admin/login` with `{"password": "…"}` (JSON, at most 1024 bytes) | `{authenticated: true, csrfToken}` and a session cookie | 400 `invalid_request`, 401 `invalid_credentials`, 403 `forbidden_origin`, 429 `too_many_attempts` with `Retry-After` |
+| `POST /api/admin/login` with `{"password": "…"}` (JSON body at most 4 KB, password at most 1024 bytes) | `{authenticated: true, csrfToken}` and a session cookie | 400 `invalid_request`, 401 `invalid_credentials`, 403 `forbidden_origin`, 413 `request_too_large`, 429 `too_many_attempts` with `Retry-After` |
 | `GET /api/admin/session` | `{authenticated: false}` or `{authenticated: true, csrfToken}` | — |
 | `POST /api/admin/logout` with `X-CSRF-Token` | `{authenticated: false}`, cookie expired | 401 `not_authenticated`, 403 `csrf_failed` / `forbidden_origin` |
 
-### Future admin endpoints
+### Writing admin endpoints
 
 Use these helpers instead of handling auth yourself:
 
@@ -358,7 +369,7 @@ and Imagick are not needed.
 ```
 MEDIA_DIR/uploads/<uuid>.webp          storage_path = uploads/<uuid>.webp
 MEDIA_DIR/uploads/thumbs/<uuid>.webp   thumb_path   = uploads/thumbs/<uuid>.webp
-MEDIA_DIR/hero/…                       (hero images; managed in a later phase)
+MEDIA_DIR/hero/<uuid>.webp             site_settings.hero_image_path (see Hero image)
 ```
 
 - `<uuid>` is a random UUIDv4 from `random_bytes`. It is also the photo's `id`,
@@ -383,11 +394,13 @@ never a row pointing at a missing image.
 
 ### Quota
 
-Before writing, `usedBytes(MEDIA_DIR)` plus the whole incoming batch (full
+Before writing, the managed media (every regular file under
+`MEDIA_DIR/uploads` and `MEDIA_DIR/hero`) plus the whole incoming batch (full
 images and thumbnails) must fit in `MEDIA_QUOTA_MB`. That total covers photos,
-thumbnails and hero images. Private storage (sessions, logs, rate limits) lives
-outside `MEDIA_DIR` and is not counted. The tree is walked on each upload,
-which is fine at PixelMani's scale.
+thumbnails and hero images. Other files in `MEDIA_DIR` (such as an `.htaccess`)
+and private storage (sessions, logs, rate limits) are not counted. Symlinks are
+neither counted nor followed. The tree is walked on each upload, which is fine
+at PixelMani's scale.
 
 ### PHP limits
 
@@ -404,14 +417,252 @@ deployment.**
 
 ### Requirements
 
-- PHP extensions: `fileinfo` (on by default) and `pdo_mysql`. `getimagesize`
-  WebP support is core PHP (7.1+). GD and Imagick are **not** used, except
-  locally to generate test fixtures.
+- PHP extensions: `fileinfo` (on by default), `pdo_mysql` and `mbstring`.
+  `getimagesize` WebP support is core PHP (7.1+). GD and Imagick are **not**
+  used, except locally to generate test fixtures.
+- `intl` is recommended: category creation uses its `Normalizer` for NFC. It is
+  loaded only by category creation, and nothing else needs it. Without it,
+  labels with decomposed letters are refused (see Categories).
 - `MEDIA_DIR` must exist and be writable by PHP. The application creates
   `uploads/` and `uploads/thumbs/` inside it as needed.
 - Apache rules that stop script execution in `/media` are added in the
   production Apache phase. The upload itself already accepts only verified
   WebP content under server-generated `.webp` names inside `MEDIA_DIR`.
+
+## Admin backend (edits, deletion, categories, hero, storage)
+
+These endpoints replace the remaining Next.js/Supabase admin routes. The admin
+frontend is **not** switched to them yet.
+
+| Endpoint | Replaces (Next.js) | Auth |
+| --- | --- | --- |
+| `POST /api/admin/photos/update` | `PATCH /api/admin/photos/[id]` | mutation |
+| `POST /api/admin/photos/delete` | `DELETE /api/admin/photos/[id]` | mutation |
+| `POST /api/admin/photos/bulk-delete` | `POST /api/admin/photos/bulk-delete` | mutation |
+| `POST /api/admin/categories/create` | `POST /api/admin/categories` | mutation |
+| `POST /api/admin/categories/delete` | `DELETE /api/admin/categories/[key]` | mutation |
+| `POST /api/admin/hero/upload` | `POST /api/admin/hero` | mutation |
+| `GET /api/admin/storage-usage` | Supabase RPC `get_photos_storage_usage` | session |
+| `GET /api/admin/categories/list` | Supabase `categories` select (admin) | session |
+
+- **mutation** = `requireAdminMutation()`: session, same origin and the
+  `X-CSRF-Token` header. Failures: 401 `not_authenticated`, 403 `csrf_failed`
+  or `forbidden_origin`. They are checked before the body is read, and nothing
+  is changed.
+- **session** = `requireAdmin()`: a valid session, no CSRF token (read-only).
+- All state changes are `POST`, because shared hosting does not always pass
+  `PATCH`/`DELETE`. There are no method overrides. Routes are static files: IDs
+  and keys go in the body, never in the URL.
+- **JSON bodies are strict.** They need `Content-Type: application/json` and
+  must be a JSON object. Every listed field is required, and unknown fields,
+  wrong types, malformed JSON and duplicate IDs give 400 `invalid_request`. An
+  oversized body gives 413 `request_too_large`. IDs are lower-case UUIDs.
+- The admin dashboard also needs `GET /api/photos` (all photos, including
+  `okategoriserad` ones) and `GET /api/hero`. The public endpoints already
+  serve those, so there is no admin copy.
+
+### Photo update
+
+`POST /api/admin/photos/update`
+
+```json
+{"id": "<uuid>", "category": "<key>", "location": "Alingsås" | null, "date": "2026-09-01" | null}
+```
+
+- **Fields:** sets category, location and date, the same three fields the old
+  route edited. Title is not editable.
+- **Required keys:** all four. `null` or `""` clears location or date.
+- **Category:** must exist; `okategoriserad` is allowed. Keys are exact
+  (`Natur` ≠ `natur`).
+- **Location:** trimmed, at most 255 characters, no control characters.
+- **Date:** a real calendar date.
+- **Statement:** one `UPDATE`, inside a transaction together with the checks
+  that the photo and the category exist.
+
+Response: `200 {photo}`, in the `GET /api/photos` shape. Errors: 404
+`not_found` (photo), 422 `unknown_category`.
+
+### Photo delete and bulk delete
+
+```json
+POST /api/admin/photos/delete        {"id": "<uuid>"}
+POST /api/admin/photos/bulk-delete   {"ids": ["<uuid>", …]}   (1–100 distinct IDs)
+```
+
+1. **Rows:** inside **one** transaction, whatever the number of photos, the
+   rows are read (`id`, `storage_path`, `thumb_path`) and deleted. Then the
+   transaction is committed.
+2. **Files:** only after the commit are the full image and thumbnail removed.
+   - A file that is already missing does not block the deletion.
+   - A file that cannot be removed leaves the row deleted. The request still
+     succeeds and the file is logged as `Orphan media file` (relative path
+     only).
+   - Files are never deleted first: a row pointing at a missing image is worse
+     than an unreferenced file.
+3. **Safety:** a stored path is deleted only if it has exactly the managed
+   shape for its kind.
+   - Full image: `uploads/<name>.webp`.
+   - Thumbnail: `uploads/thumbs/<name>.webp`.
+   - The name must not start with a dot. Everything `PublicUrls` refuses
+     (traversal, absolute paths, backslashes, drive letters, control
+     characters) is refused too.
+   - The parent directory must resolve inside `MEDIA_DIR`.
+   - Symlinks and directories are never deleted.
+   - A path that another photo row or the hero setting still references is
+     kept.
+
+   Paths that fail any of these checks are logged and left untouched; the row
+   is still deleted.
+
+Responses:
+- **Single:** `200 {deleted: true, id}`, or 404 `not_found`.
+- **Bulk:** `200 {deletedCount, deletedIds, notFoundIds}`.
+  - `deletedIds` keeps the request order. IDs that do not exist are listed in
+    `notFoundIds` and are not an error; they are already gone.
+  - Only unknown IDs: 404 `not_found`.
+  - Duplicate IDs, an empty list or more than 100 IDs: 400. Duplicates are
+    rejected instead of silently merged.
+  - The old route's field name was `photoIds`; the new one is `ids`.
+
+### Categories
+
+```json
+POST /api/admin/categories/create   {"label": "Porträtt"}
+POST /api/admin/categories/delete   {"key": "porträtt"}
+GET  /api/admin/categories/list
+```
+
+**Create.** The server generates the key from the label; a client-supplied key
+is rejected. Rules, in order:
+
+1. **Validation:** the label must be text and valid UTF-8.
+2. **NFC:** normalised with PHP `Normalizer` (intl). Without intl, labels that
+   contain combining marks (decomposed letters) are refused with 400 instead
+   of being stored differently. Precomposed Swedish letters work either way.
+3. **Trimming:** surrounding whitespace is removed, including Unicode spaces.
+4. **Characters:** control characters and invisible formatting characters
+   (zero-width, bidirectional overrides) are refused.
+5. **Length:** 2–40 characters after trimming, counted as characters.
+6. **Key:** generated as in the old admin:
+   - lower case (`mb_strtolower`)
+   - whitespace runs become `-`
+   - only `a–z 0–9 å ä ö -` are kept
+   - repeated `-` collapse, and `-` is trimmed from both ends
+
+   Swedish letters are kept, never transliterated. Other accented letters are
+   dropped, as before (`Café` → `caf`).
+
+   | Label | Key |
+   | --- | --- |
+   | `Porträtt` | `porträtt` |
+   | `Modelfoto / Fashion` | `modelfoto-fashion` |
+   | `Höst  på Öland` | `höst-på-öland` |
+
+7. **Usable key:** a label that produces an empty key gives 400.
+8. **Reserved:** `okategoriserad` gives 409 `reserved_category`.
+9. **Duplicates:** an existing key (byte comparison, as the `utf8mb4_bin`
+   unique index does) or the same label ignoring letter case gives 409
+   `category_exists`. A unique-key race at insert time also gives 409.
+10. **Insert:** with an application UUIDv4 and `created_at` in UTC with
+    microseconds.
+
+Response: `201 {category: {id, key, label, created_at}}`.
+
+**Delete.** In one transaction:
+1. the category row is locked
+2. photos in the category move to `okategoriserad`
+3. the category is deleted
+
+The photos foreign key is `RESTRICT`, so the order matters. If anything fails,
+the transaction is rolled back and both the category and the photo assignments
+are unchanged. No photo files are touched.
+
+Response: `200 {deleted: true, key, label, reassignedPhotos}`. Errors: 404
+`not_found`, and 409 `protected_category` for `okategoriserad`, which can never
+be deleted.
+
+**List** (session only): `{categories: [...]}` including `okategoriserad`,
+sorted by label. The admin needs it for its category pickers; the public
+`GET /api/categories` hides it.
+
+### Hero image
+
+`POST /api/admin/hero/upload` takes `multipart/form-data` with exactly one
+file in the field `file`.
+- **Image:** WebP of at most 2560 × 2560 px and `MAX_UPLOAD_BYTES`, checked by
+  the same `WebpInspector` as photos. The 2000 px gallery limit does not apply.
+- **Browser preparation:** `createHeroImageVariant()` in `lib/imageVariants.ts`
+  (2560 px, quality 0.88, the same as the current admin).
+- **Rejected:** `file[]`, extra files and any other field.
+
+1. The new file is validated (content and dimensions), and the current setting
+   is read.
+2. **Quota:** managed media − the current hero file (only if its path is a
+   managed `hero/` path) + the new file must fit in `MEDIA_QUOTA_MB`, otherwise
+   507 before anything is written.
+3. The file is stored as `hero/<uuid>.webp`, created exclusively. The client's
+   file name is never used.
+4. In a transaction, the setting is read again (`FOR UPDATE` on MySQL) and
+   `site_settings.hero_image_path` is updated, or inserted if missing. Then
+   the transaction is committed.
+5. Only then is the previous hero file deleted.
+   - It is deleted only if its stored path is a managed `hero/<name>.webp`
+     path. Anything else, such as `../…`, a gallery photo or `.htaccess`, is
+     logged and left alone.
+   - If the file is missing, that is fine.
+   - If it cannot be deleted, it is logged as an orphan and the new hero stays
+     active.
+
+If step 3 or 4 fails, the new file is removed and the old hero stays active and
+untouched. After a success, the setting always points at the new, existing
+file. Each upload gets a new URL, so no cache-busting parameter is needed.
+
+Response: `201 {url, path, width, height, bytes}`. Errors: 400, 413
+(`request_too_large` / `file_too_large`), 422 (`invalid_image` /
+`image_dimensions`), 507 `quota_exceeded`.
+
+### Storage usage
+
+`GET /api/admin/storage-usage` (session only):
+
+```json
+{"total_bytes": 2938519, "total_mb": 2.8, "file_count": 10,
+ "quota_bytes": 524288000, "quota_mb": 500, "remaining_bytes": 521349481, "remaining_mb": 497.2}
+```
+
+- **Counted:** regular files under `MEDIA_DIR/uploads` (photos and thumbnails)
+  and `MEDIA_DIR/hero`. This is the same total that the upload quota checks.
+- **Not counted:** sessions, logs, rate-limit files, application files and
+  anything else in `MEDIA_DIR`.
+- **Units:** MB are MiB (1 048 576 bytes), the unit of `MEDIA_QUOTA_MB`.
+  `remaining` never goes below 0.
+- **Compatibility:** `total_bytes`, `total_mb` and `file_count` match the old
+  Supabase figures. `quota_*` lets the dashboard drop its hard-coded 500 MB.
+- No filesystem path is ever returned.
+
+### Transactions and non-atomic boundaries
+
+| Operation | In one transaction | Outside it, after the commit |
+| --- | --- | --- |
+| Photo update | existence checks + `UPDATE` | — |
+| Photo delete / bulk delete | select + `DELETE` of every row | deleting the files |
+| Category delete | lock + reassign photos + `DELETE` | — |
+| Hero replacement | re-read + update or insert the setting | deleting the old hero file |
+| Photo upload / hero upload | inserts / setting update | — (the new files are written before the transaction and removed if it fails) |
+
+No transaction is held open while files are moved or deleted. The database and
+the filesystem cannot be updated atomically together. The order is chosen so
+that a crash or failure can only leave an **unreferenced file**, never a row or
+setting that points at a missing file. Orphans are logged with their relative
+path.
+
+### Thumbnails of migrated photos
+
+The 9 migrated photos have no thumbnails (`thumb_path` is null), and Phase 8
+deliberately does **not** create them. The Supabase site may still receive new
+photos before the final cutover, so a thumbnail backfill belongs **after the
+final data sync** and runs once. Until then the frontend falls back from
+`thumb_url` to `url`, so everything works, just with larger images in the grid.
 
 ## Logging
 
@@ -445,9 +696,20 @@ administrative task done with a different account.
 `/api/health?diagnostics=1` adds PHP and database version details. It is only
 available when `APP_ENV=local` **and** the request comes from `127.0.0.1` or `::1`.
 
-The `/api/<name>`, `/api/admin/<name>` and `/api/admin/<group>/<name>` →
-`<same>.php` rewrite in the vhost is for local development only. Reload Apache in
-Laragon after changing it. Production Apache rules are written in a later phase.
+The vhost rewrite is for local development only. It maps these to
+`<same>.php`:
+- `/api/<name>`
+- `/api/admin/<name>`
+- `/api/admin/<group>/<name>`, where `<group>` is `photos`, `categories` or
+  `hero`
+
+Other groups, deeper paths and upper-case endpoint names are not rewritten
+(404). Reload Apache in Laragon after changing it. Production Apache rules are
+written in a later phase.
+
+On Windows, Apache matches the case of existing directories case-insensitively
+(`/api/admin/Photos/update` still works locally). Linux hosting is
+case-sensitive.
 
 ## Tests
 
@@ -458,11 +720,19 @@ php php/tests/smoke.php
 
 The smoke tests cover configuration validation, error hiding in production,
 JSON output, method rejection, logging failures, public-URL and stored-path
-safety, timestamp conversion, admin authentication and the upload pipeline.
-The upload tests cover parsing, content validation, storage, the
-transaction and cleanup, and the quota. They write only to temporary
-directories and an in-memory SQLite database. The few real-MySQL checks remove
-their rows again. The upload tests need GD to generate fixtures (local only).
+safety, timestamp conversion, admin authentication, the upload pipeline and
+the admin backend.
+- **Upload tests:** parsing, content validation, storage, the transaction and
+  cleanup, and the quota.
+- **Admin-backend tests:** input validation, photo update, delete and bulk
+  delete (including filesystem failures and unsafe stored paths), category
+  keys, creation and deletion, hero replacement (including rollback and orphan
+  cases), and storage usage.
+
+Most tests use temporary directories and an in-memory SQLite database with
+switchable failure triggers. The real-MySQL checks undo every change and
+compare the catalogue before and after. The upload tests need GD to generate
+fixtures (local only).
 
 To compare the PHP API with the live Supabase data (read-only, GET only):
 

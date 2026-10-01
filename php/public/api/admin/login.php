@@ -4,6 +4,7 @@
  *
  * 200 {authenticated: true, csrfToken}   session cookie issued (new ID)
  * 400 invalid_request                     not JSON / no password
+ * 413 request_too_large                   body over 4 KB
  * 401 invalid_credentials                 wrong password (or no usable hash configured)
  * 403 forbidden_origin                    foreign Origin
  * 429 too_many_attempts + Retry-After     rate limited (per REMOTE_ADDR)

@@ -80,6 +80,20 @@ final class PublicCatalog
         ], $statement->fetchAll());
     }
 
+    /**
+     * Every category, including the internal fallback, sorted by label. For
+     * the admin (category pickers); the public list hides the fallback.
+     */
+    public function adminCategories(): array
+    {
+        return array_map(static fn (array $row): array => [
+            'id' => $row['id'],
+            'key' => $row['key'],
+            'label' => $row['label'],
+            'created_at' => self::isoTimestamp($row['created_at']),
+        ], $this->pdo->query('SELECT id, `key`, label, created_at FROM categories ORDER BY label ASC')->fetchAll());
+    }
+
     /** Stored path of the hero image, or null if none is configured. */
     public function heroPath(): ?string
     {

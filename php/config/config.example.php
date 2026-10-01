@@ -39,7 +39,8 @@ return [
     // 'MEDIA_DIR' => '/path/to/web/root/media',
     // 'MAX_UPLOAD_BYTES' => '15728640',     // per full-size image (thumbnails: 2 MiB, fixed)
     // 'MAX_FILES_PER_REQUEST' => '20',      // photos per request; PHP max_file_uploads also applies (2 files per photo)
-    // 'MEDIA_QUOTA_MB' => '500',            // total size of MEDIA_DIR (photos, thumbnails, hero)
+    // 'MEDIA_QUOTA_MB' => '500',            // managed media: MEDIA_DIR/uploads + MEDIA_DIR/hero
+    // The same MAX_UPLOAD_BYTES applies to the hero image (max 2560 × 2560 px).
 
     // Optional. Writable, NOT web-accessible directory for admin sessions and
     // login rate-limit state. Defaults to php/storage.

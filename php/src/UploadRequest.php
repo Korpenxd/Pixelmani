@@ -47,30 +47,10 @@ final class UploadRequest
         ?int $postMaxBytes = null,
         ?int $maxFileUploads = null,
     ): self {
-        $postMaxBytes ??= self::iniBytes((string) ini_get('post_max_size'));
         $maxFileUploads ??= (int) ini_get('max_file_uploads');
 
-        // PHP silently drops the whole body when it exceeds post_max_size.
-        $contentLength = (int) ($server['CONTENT_LENGTH'] ?? 0);
-        if ($postMaxBytes > 0 && $contentLength > $postMaxBytes) {
-            throw new HttpException(413, 'request_too_large', 'The upload is larger than the server accepts in one request. Upload fewer photos at a time.');
-        }
-
-        $contentType = strtolower(trim(explode(';', (string) ($server['CONTENT_TYPE'] ?? ''))[0]));
-        if ($contentType !== 'multipart/form-data') {
-            throw new HttpException(400, 'invalid_request', 'The request must be multipart/form-data.');
-        }
-
-        foreach (array_keys($post) as $field) {
-            if (!in_array((string) $field, self::FIELDS, true)) {
-                throw new HttpException(400, 'invalid_request', "Unknown form field: $field.");
-            }
-        }
-        foreach (array_keys($files) as $field) {
-            if (!in_array((string) $field, self::FILE_FIELDS, true)) {
-                throw new HttpException(400, 'invalid_request', "Unknown file field: $field.");
-            }
-        }
+        self::requireMultipart($server, $postMaxBytes, 'Upload fewer photos at a time.');
+        self::requireOnlyFields($post, $files, self::FIELDS, self::FILE_FIELDS);
 
         $full = self::fileList($files, 'files');
         $thumbs = self::fileList($files, 'thumbnails');
@@ -95,13 +75,13 @@ final class UploadRequest
 
         $names = self::originalNames($post['originalNames'] ?? null, count($full));
 
-        $category = self::text($post['category'] ?? null, 'category', 64, true);
+        $category = Input::text($post['category'] ?? null, 'category', 64);
         if ($category === null) {
             throw new HttpException(400, 'invalid_request', 'A category is required.');
         }
-        $title = self::text($post['title'] ?? null, 'title', 255, false);
-        $location = self::text($post['location'] ?? null, 'location', 255, false);
-        $date = self::date($post['date'] ?? null);
+        $title = Input::text($post['title'] ?? null, 'title', 255);
+        $location = Input::text($post['location'] ?? null, 'location', 255);
+        $date = Input::date($post['date'] ?? null);
 
         $items = [];
         foreach ($full as $index => $fullFile) {
@@ -116,6 +96,48 @@ final class UploadRequest
         }
 
         return new self($items, $category, $location, $date);
+    }
+
+    /**
+     * Shared by every multipart admin endpoint: the body fits post_max_size
+     * and is multipart/form-data.
+     *
+     * @param array<string, mixed> $server usually $_SERVER
+     */
+    public static function requireMultipart(array $server, ?int $postMaxBytes, string $hint): void
+    {
+        $postMaxBytes ??= self::iniBytes((string) ini_get('post_max_size'));
+
+        // PHP silently drops the whole body when it exceeds post_max_size.
+        $contentLength = (int) ($server['CONTENT_LENGTH'] ?? 0);
+        if ($postMaxBytes > 0 && $contentLength > $postMaxBytes) {
+            throw new HttpException(413, 'request_too_large', "The upload is larger than the server accepts in one request. $hint");
+        }
+
+        $contentType = strtolower(trim(explode(';', (string) ($server['CONTENT_TYPE'] ?? ''))[0]));
+        if ($contentType !== 'multipart/form-data') {
+            throw new HttpException(400, 'invalid_request', 'The request must be multipart/form-data.');
+        }
+    }
+
+    /**
+     * Rejects unknown form and file fields.
+     *
+     * @param list<string> $fields
+     * @param list<string> $fileFields
+     */
+    public static function requireOnlyFields(array $post, array $files, array $fields, array $fileFields): void
+    {
+        foreach (array_keys($post) as $field) {
+            if (!in_array((string) $field, $fields, true)) {
+                throw new HttpException(400, 'invalid_request', "Unknown form field: $field.");
+            }
+        }
+        foreach (array_keys($files) as $field) {
+            if (!in_array((string) $field, $fileFields, true)) {
+                throw new HttpException(400, 'invalid_request', "Unknown file field: $field.");
+            }
+        }
     }
 
     /** @return list<array{name: mixed, tmp_name: mixed, error: mixed, size: mixed}> */
@@ -143,8 +165,12 @@ final class UploadRequest
         return $list;
     }
 
-    /** @return array{tmp: string, size: int} */
-    private static function checkedFile(array $file, int $maxBytes, string $label, bool $requireUploadedFiles): array
+    /**
+     * One entry of $_FILES: upload error mapping, real size within [1, $maxBytes].
+     *
+     * @return array{tmp: string, size: int}
+     */
+    public static function checkedFile(array $file, int $maxBytes, string $label, bool $requireUploadedFiles): array
     {
         switch ((int) $file['error']) {
             case UPLOAD_ERR_OK:
@@ -199,40 +225,6 @@ final class UploadRequest
             }
         }
         return array_map('trim', $names);
-    }
-
-    /** Trimmed text; '' becomes null. Valid UTF-8, no control characters, bounded. */
-    private static function text(mixed $value, string $field, int $maxLength, bool $required): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-        if (!is_string($value)) {
-            throw new HttpException(400, 'invalid_request', "$field must be text.");
-        }
-        $value = trim($value);
-        if ($value === '') {
-            return null;
-        }
-        if (!mb_check_encoding($value, 'UTF-8') || preg_match('/[\x00-\x1F\x7F]/u', $value)) {
-            throw new HttpException(400, 'invalid_request', "$field contains invalid characters.");
-        }
-        if (mb_strlen($value, 'UTF-8') > $maxLength) {
-            throw new HttpException(400, 'invalid_request', "$field may be at most $maxLength characters.");
-        }
-        return $value;
-    }
-
-    private static function date(mixed $value): ?string
-    {
-        if ($value === null || (is_string($value) && trim($value) === '')) {
-            return null;
-        }
-        if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', trim($value), $m)
-            || !checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
-            throw new HttpException(400, 'invalid_request', 'date must be YYYY-MM-DD.');
-        }
-        return trim($value);
     }
 
     /** "8M" / "2G" / "512K" / "1048576" → bytes. 0 means unlimited. */

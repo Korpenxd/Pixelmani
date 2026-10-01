@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace PixelMani;
 
 /**
- * Validated upload/media settings. Built only by admin upload endpoints, so a
+ * Validated upload/media settings. Built only by admin endpoints, so a
  * broken upload setting never affects the public API.
  *
  * MEDIA_DIR is the filesystem directory served publicly at UPLOAD_URL_BASE
@@ -13,7 +13,7 @@ namespace PixelMani;
  *
  *   MEDIA_DIR/uploads/<uuid>.webp          full-size gallery photos
  *   MEDIA_DIR/uploads/thumbs/<uuid>.webp   their thumbnails
- *   MEDIA_DIR/hero/<file>.webp             landing images
+ *   MEDIA_DIR/hero/<uuid>.webp             landing image (one at a time)
  */
 final class UploadConfig
 {
@@ -24,6 +24,9 @@ final class UploadConfig
     /** Contract with the browser: it scales images before uploading. */
     public const FULL_MAX_DIMENSION = 2000;
     public const THUMB_MAX_DIMENSION = 600;
+
+    /** Landing image: the browser scales it to at most 2560 × 2560 (quality 0.88). */
+    public const HERO_MAX_DIMENSION = 2560;
 
     /** Thumbnails are at most 600 × 600 WebP; 2 MiB is far above any real one. */
     public const MAX_THUMB_BYTES = 2 * 1024 * 1024;
