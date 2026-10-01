@@ -32,6 +32,15 @@ return [
     // 'LOGIN_RATE_LIMIT_MAX' => '5',        // failed logins per IP ...
     // 'LOGIN_RATE_LIMIT_WINDOW' => '900',   // ... per this many seconds
 
+    // Optional photo-upload settings (defaults shown).
+    // MEDIA_DIR: the directory served publicly at UPLOAD_URL_BASE (default:
+    // php/public + UPLOAD_URL_BASE, i.e. php/public/media). Must exist and be
+    // writable by PHP. Holds uploads/, uploads/thumbs/ and hero/.
+    // 'MEDIA_DIR' => '/path/to/web/root/media',
+    // 'MAX_UPLOAD_BYTES' => '15728640',     // per full-size image (thumbnails: 2 MiB, fixed)
+    // 'MAX_FILES_PER_REQUEST' => '20',      // photos per request; PHP max_file_uploads also applies (2 files per photo)
+    // 'MEDIA_QUOTA_MB' => '500',            // total size of MEDIA_DIR (photos, thumbnails, hero)
+
     // Optional. Writable, NOT web-accessible directory for admin sessions and
     // login rate-limit state. Defaults to php/storage.
     // 'STORAGE_DIR' => '/path/outside/web/root/storage',

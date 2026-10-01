@@ -32,6 +32,11 @@ require_once __DIR__ . '/src/AdminConfig.php';
 require_once __DIR__ . '/src/RateLimiter.php';
 require_once __DIR__ . '/src/AdminSession.php';
 require_once __DIR__ . '/src/AdminAuth.php';
+require_once __DIR__ . '/src/UploadConfig.php';
+require_once __DIR__ . '/src/WebpInspector.php';
+require_once __DIR__ . '/src/MediaStore.php';
+require_once __DIR__ . '/src/UploadRequest.php';
+require_once __DIR__ . '/src/PhotoUploader.php';
 require_once __DIR__ . '/src/App.php';
 
 use PixelMani\App;

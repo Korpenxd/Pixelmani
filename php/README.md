@@ -6,9 +6,10 @@ current Next.js/Supabase site and is not used by it yet.
 
 So far it provides the foundation (configuration, database connection, JSON
 responses, method checks, error handling, logging, health check) and the
-public read-only API, and the admin authentication foundation (login,
-session, logout). There are no upload, edit or contact endpoints yet. The
-live admin still uses the Next.js login; these endpoints exist alongside it.
+public read-only API, admin authentication (login, session, logout) and the
+authenticated photo upload. There are no edit, delete, category, hero or
+contact endpoints yet. The live admin still uses the Next.js login and
+Supabase; these endpoints exist alongside it.
 
 ## Layout
 
@@ -29,11 +30,13 @@ php/
     api/admin/login.php    POST /api/admin/login
     api/admin/session.php  GET  /api/admin/session
     api/admin/logout.php   POST /api/admin/logout
-    media/               local runtime copies of photo files (gitignored)
+    api/admin/photos/upload.php  POST /api/admin/photos/upload
+    media/               MEDIA_DIR locally: photo files (gitignored)
   storage/logs/          default log directory (gitignored)
   storage/sessions/      admin PHP sessions (gitignored)
   storage/rate-limit/    login rate-limit state (gitignored)
   tests/smoke.php        local smoke tests
+  tests/upload-fixtures.php   generates local upload test images (uses GD; tests only)
   dev/apache-vhost.local.conf   Laragon vhost (local development only)
 ```
 
@@ -58,6 +61,10 @@ layout keeps them outside it.
 | `SESSION_IDLE_SECONDS` | no | Default `1800` (60–86400) |
 | `COOKIE_SECURE` | no | Default `true`, or `false` with `APP_ENV=local`. `false` is refused outside local. |
 | `LOGIN_RATE_LIMIT_MAX` / `LOGIN_RATE_LIMIT_WINDOW` | no | Default 5 failed logins per 900 s per IP |
+| `MEDIA_DIR` | no | Filesystem directory served at `UPLOAD_URL_BASE`. Default `php/public` + `UPLOAD_URL_BASE`. Must exist and be writable. |
+| `MAX_UPLOAD_BYTES` | no | Per full-size image, default `15728640` (15 MiB). Thumbnails are capped at 2 MiB. |
+| `MAX_FILES_PER_REQUEST` | no | Photos per upload request, default `20` (1–100) |
+| `MEDIA_QUOTA_MB` | no | Total size of `MEDIA_DIR`, default `500` |
 | `UPLOAD_URL_BASE` | no | Same-origin URL path for photo files, default `/media`. No scheme or host. |
 
 Sources, highest precedence first:
@@ -285,6 +292,127 @@ $app->adminAuth()->requireAdminMutation();  // every state-changing request
 
 To lift a local lockout, delete the files in `php/storage/rate-limit/`.
 
+## Photo upload
+
+`POST /api/admin/photos/upload` (also `…/upload.php`) stores a batch of
+photos. Either the whole batch is stored, or nothing is.
+
+### Contract
+
+`multipart/form-data`, with the `X-CSRF-Token` header and the session cookie:
+
+| Field | |
+| --- | --- |
+| `files[]` | Full-size images: WebP, at most 2000 × 2000 px, at most `MAX_UPLOAD_BYTES` each |
+| `thumbnails[]` | One per image, same order: WebP, at most 600 × 600 px, at most 2 MiB |
+| `originalNames` | JSON array of the original file names, one per image (1–255 printable characters). Stored in `photos.name`. |
+| `category` | Existing category key (at most 64 characters). `okategoriserad` is allowed. |
+| `title` | Optional, at most 255 characters, for the whole batch. If blank, each photo gets its original name without the extension. |
+| `location` | Optional, at most 255 characters, for the whole batch |
+| `date` | Optional `YYYY-MM-DD`, for the whole batch |
+
+Any other field, including a client-supplied path, is rejected. The browser
+prepares both variants with `createImageVariants()` in
+`lib/imageVariants.ts`. Full images are WebP at most 2000 px with quality 0.84,
+and thumbnails are WebP at most 600 px with quality 0.80. Aspect ratio is kept
+and images are never upscaled. The server never resizes or re-encodes, so GD
+and Imagick are not needed.
+
+**Response:** `201 {"photos": [...]}`, in the same shape as `GET /api/photos`
+(`url`, `thumb_url`, newest first).
+
+| Status | Code | When |
+| --- | --- | --- |
+| 400 | `invalid_request`, `upload_incomplete` | Malformed body or fields, thumbnail or name counts that do not match, a bad date or name, a partial upload |
+| 401 | `not_authenticated` | No valid session (including after the idle timeout) |
+| 403 | `csrf_failed`, `forbidden_origin` | Missing or wrong CSRF token, or a foreign Origin |
+| 413 | `request_too_large`, `too_many_files`, `file_too_large` | Body over `post_max_size`, too many photos, a file over its limit |
+| 422 | `invalid_image`, `image_dimensions`, `unknown_category` | Content is not an acceptable WebP, the image is over its pixel limit, or the category does not exist |
+| 507 | `quota_exceeded` | The batch would push `MEDIA_DIR` over `MEDIA_QUOTA_MB` |
+| 500 | `internal_error` | Unexpected; details are in the log |
+
+### Validation
+
+- **Order:** authentication, origin and CSRF (`requireAdminMutation()`), then
+  the request structure, fields and real file sizes, then the category, then
+  every file's content and dimensions, then the quota. Nothing is written until
+  all of these pass.
+- **Content** is judged only by the bytes, never by the browser's MIME type,
+  the extension or the file name. `WebpInspector` requires:
+  - a RIFF/WEBP container whose declared size equals the file size
+  - a complete chunk walk with only still-image chunks (`VP8X`, `ICCP`,
+    `ALPH`, `VP8 `, `VP8L`) and nothing after the last chunk
+  - exactly one bitstream with a valid signature, whose size matches the canvas
+  - libmagic (`finfo`) reporting `image/webp`
+  - `getimagesize()` agreeing on the type and dimensions
+
+  Rejected: SVG, JPEG and PNG under any name, text, empty files, truncated
+  files, data appended after the image, header-only polyglots, animation, and
+  EXIF/XMP metadata (canvas output never contains it, and this also keeps GPS
+  data out). Pixel data is not decoded, since that would need GD.
+- **Sizes** are measured on the temporary file itself, never taken from the
+  client.
+
+### Storage
+
+```
+MEDIA_DIR/uploads/<uuid>.webp          storage_path = uploads/<uuid>.webp
+MEDIA_DIR/uploads/thumbs/<uuid>.webp   thumb_path   = uploads/thumbs/<uuid>.webp
+MEDIA_DIR/hero/…                       (hero images; managed in a later phase)
+```
+
+- `<uuid>` is a random UUIDv4 from `random_bytes`. It is also the photo's `id`,
+  and the full image and its thumbnail share it. Names never come from the
+  client and are always `.webp`.
+- A UUID whose file or database row already exists is skipped. Files are
+  created exclusively (`fopen 'x'`), so an existing file or symlink is never
+  overwritten. Every target must resolve (realpath) inside `MEDIA_DIR`.
+- The database stores only relative paths. URLs come from `PublicUrls`, for
+  example `/media/uploads/<uuid>.webp`.
+- Rows store `width`, `height` and `bytes` of the full image and
+  `mime = image/webp`. In a batch, `created_at` values are 1 µs apart in
+  upload order, so ordering is stable and the last file is the newest.
+
+### All or nothing
+
+Files are moved into place first, then every row is inserted in one
+transaction. If any move or insert fails, the transaction is rolled back and
+every file this request created is deleted. Pre-existing files are never
+touched. A crash between the two steps can only leave an unreferenced file,
+never a row pointing at a missing image.
+
+### Quota
+
+Before writing, `usedBytes(MEDIA_DIR)` plus the whole incoming batch (full
+images and thumbnails) must fit in `MEDIA_QUOTA_MB`. That total covers photos,
+thumbnails and hero images. Private storage (sessions, logs, rate limits) lives
+outside `MEDIA_DIR` and is not counted. The tree is walked on each upload,
+which is fine at PixelMani's scale.
+
+### PHP limits
+
+PHP rejects or trims uploads before any code runs, and the endpoint reports
+it cleanly:
+- A body over `post_max_size` gives `413 request_too_large`.
+- Files beyond `max_file_uploads` give `413 too_many_files`. **Each photo is two
+  files**, so with PHP's default of 20 a request can carry at most 10 photos.
+  The frontend must send batches of at most `floor(max_file_uploads / 2)`.
+- `upload_max_filesize` gives `413 file_too_large`.
+
+php.ini is never changed by the application. **Check Loopia's values at
+deployment.**
+
+### Requirements
+
+- PHP extensions: `fileinfo` (on by default) and `pdo_mysql`. `getimagesize`
+  WebP support is core PHP (7.1+). GD and Imagick are **not** used, except
+  locally to generate test fixtures.
+- `MEDIA_DIR` must exist and be writable by PHP. The application creates
+  `uploads/` and `uploads/thumbs/` inside it as needed.
+- Apache rules that stop script execution in `/media` are added in the
+  production Apache phase. The upload itself already accepts only verified
+  WebP content under server-generated `.webp` names inside `MEDIA_DIR`.
+
 ## Logging
 
 Files are named `app-YYYY-MM-DD.log`, one line per entry, with UTC timestamps
@@ -317,8 +445,9 @@ administrative task done with a different account.
 `/api/health?diagnostics=1` adds PHP and database version details. It is only
 available when `APP_ENV=local` **and** the request comes from `127.0.0.1` or `::1`.
 
-The `/api/<name>` and `/api/admin/<name>` → `<name>.php` rewrite in the
-vhost is for local development only. Reload Apache in Laragon after changing it. Production Apache rules are written in a later phase.
+The `/api/<name>`, `/api/admin/<name>` and `/api/admin/<group>/<name>` →
+`<same>.php` rewrite in the vhost is for local development only. Reload Apache in
+Laragon after changing it. Production Apache rules are written in a later phase.
 
 ## Tests
 
@@ -329,8 +458,11 @@ php php/tests/smoke.php
 
 The smoke tests cover configuration validation, error hiding in production,
 JSON output, method rejection, logging failures, public-URL and stored-path
-safety, timestamp conversion, and a read-only database check with the runtime
-user. They write only to temporary directories and an in-memory SQLite database.
+safety, timestamp conversion, admin authentication and the upload pipeline.
+The upload tests cover parsing, content validation, storage, the
+transaction and cleanup, and the quota. They write only to temporary
+directories and an in-memory SQLite database. The few real-MySQL checks remove
+their rows again. The upload tests need GD to generate fixtures (local only).
 
 To compare the PHP API with the live Supabase data (read-only, GET only):
 

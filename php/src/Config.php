@@ -28,13 +28,15 @@ final class Config
     ];
 
     /**
-     * Admin-only settings. They are carried unvalidated and only checked by
-     * AdminConfig when an admin endpoint runs, so a missing or broken admin
-     * setting can never take the public API down.
+     * Admin-only settings (authentication and uploads). They are carried
+     * unvalidated and only checked by AdminConfig / UploadConfig when an admin
+     * endpoint runs, so a missing or broken admin setting can never take the
+     * public API down.
      */
     public const ADMIN_KEYS = [
         'ADMIN_PASSWORD_HASH', 'SESSION_NAME', 'SESSION_IDLE_SECONDS', 'COOKIE_SECURE',
         'LOGIN_RATE_LIMIT_MAX', 'LOGIN_RATE_LIMIT_WINDOW',
+        'MEDIA_DIR', 'MAX_UPLOAD_BYTES', 'MAX_FILES_PER_REQUEST', 'MEDIA_QUOTA_MB',
     ];
 
     /** URL path under which stored photo files are served, on the same origin. */

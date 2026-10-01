@@ -44,6 +44,26 @@ final class PublicCatalog
         return array_map($this->presentPhoto(...), $statement->fetchAll());
     }
 
+    /**
+     * The given photos in the same public shape as photos(), newest first.
+     *
+     * @param list<string> $ids
+     */
+    public function photosByIds(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($ids), '?'));
+        $statement = $this->pdo->prepare(
+            'SELECT ' . self::PHOTO_COLUMNS . " FROM photos WHERE id IN ($placeholders) ORDER BY created_at DESC"
+        );
+        $statement->execute(array_values($ids));
+
+        return array_map($this->presentPhoto(...), $statement->fetchAll());
+    }
+
     /** Public categories sorted by label (Swedish collation), without the internal fallback. */
     public function categories(): array
     {

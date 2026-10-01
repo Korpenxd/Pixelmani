@@ -20,8 +20,19 @@ require_once __DIR__ . '/../src/PublicUrls.php';
 require_once __DIR__ . '/../src/PublicCatalog.php';
 require_once __DIR__ . '/../src/AdminConfig.php';
 require_once __DIR__ . '/../src/RateLimiter.php';
+require_once __DIR__ . '/../src/UploadConfig.php';
+require_once __DIR__ . '/../src/WebpInspector.php';
+require_once __DIR__ . '/../src/MediaStore.php';
+require_once __DIR__ . '/../src/UploadRequest.php';
+require_once __DIR__ . '/../src/PhotoUploader.php';
+require_once __DIR__ . '/upload-fixtures.php';
 
 use PixelMani\AdminConfig;
+use PixelMani\HttpException;
+use PixelMani\MediaStore;
+use PixelMani\PhotoUploader;
+use PixelMani\UploadConfig;
+use PixelMani\UploadRequest;
 use PixelMani\RateLimiter;
 use PixelMani\RateLimitUnavailableException;
 use PixelMani\Config;
@@ -590,6 +601,369 @@ check('auth logs contain no password or hash', !str_contains($logs, 'correct hor
 check('auth events are logged without raw IP addresses', str_contains($logs, 'Admin login failed') && !str_contains($logs, '127.0.0.1'));
 
 removeTree($storage);
+
+// ── Photo uploads ───────────────────────────────────────────────────────────
+
+echo "\nPhoto upload: request parsing\n";
+
+$fixtureDir = tempDir();
+$fx = makeUploadFixtures($fixtureDir);
+// A real browser-made (VP8X) photo when the migration bundle is present.
+$vp8x = isset($fx['browser-vp8x.webp']) ? 'browser-vp8x.webp' : 'full-c.webp';
+$work = tempDir();
+
+/** Fresh temporary copies of the given fixtures, shaped like $_FILES[field]. */
+$filesField = static function (array $names, array $overrides = []) use ($fx, $work): array {
+    $field = ['name' => [], 'type' => [], 'tmp_name' => [], 'error' => [], 'size' => []];
+    foreach (array_values($names) as $i => $name) {
+        $tmp = $work . DIRECTORY_SEPARATOR . 'php' . bin2hex(random_bytes(6)) . '.tmp';
+        copy($fx[$name], $tmp);
+        $field['name'][$i] = 'client-' . $name;
+        $field['type'][$i] = 'image/webp'; // whatever the browser claims
+        $field['tmp_name'][$i] = $tmp;
+        $field['error'][$i] = $overrides[$i] ?? UPLOAD_ERR_OK;
+        $field['size'][$i] = filesize($tmp);
+    }
+    return $field;
+};
+$multipart = ['CONTENT_TYPE' => 'multipart/form-data; boundary=x', 'CONTENT_LENGTH' => '1000'];
+
+$mediaRoot = tempDir();
+$uploadConfig = UploadConfig::create($mediaRoot, 15 * 1024 * 1024, 20, 500 * 1024 * 1024);
+
+/** Parses a request; returns UploadRequest or ['http' => status, 'code' => code]. */
+$parse = static function (array $post, array $files, array $server = [], ?UploadConfig $config = null, ?int $postMax = 0, ?int $maxUploads = 0) use ($multipart, $uploadConfig) {
+    try {
+        return UploadRequest::fromArrays($post, $files, $server + $multipart, $config ?? $uploadConfig, false, $postMax, $maxUploads);
+    } catch (HttpException $e) {
+        return ['http' => $e->status, 'code' => $e->errorCode];
+    }
+};
+$pair = static fn (array $full, array $thumbs) => ['files' => $filesField($full), 'thumbnails' => $filesField($thumbs)];
+$meta = static fn (array $over = []) => $over + ['originalNames' => json_encode(['IMG_0001.JPG', 'Sommar på Öland.jpeg']), 'category' => 'natur'];
+
+$ok = $parse($meta(), $pair(['full-a.webp', 'full-b.webp'], ['thumb-a.webp', 'thumb-b.webp']));
+check('valid two-photo request parses', $ok instanceof UploadRequest && count($ok->items) === 2);
+check('blank title falls back to each original name without extension',
+    $ok instanceof UploadRequest && $ok->items[0]['title'] === 'IMG_0001' && $ok->items[1]['title'] === 'Sommar på Öland');
+check('original names are kept, including Swedish characters', $ok instanceof UploadRequest && $ok->items[1]['name'] === 'Sommar på Öland.jpeg');
+$titled = $parse($meta(['title' => '  Kväll  ', 'location' => ' Alingsås ', 'date' => '2026-06-30']), $pair(['full-a.webp', 'full-b.webp'], ['thumb-a.webp', 'thumb-b.webp']));
+check('explicit title/location/date apply to the whole batch (trimmed)',
+    $titled instanceof UploadRequest && $titled->items[0]['title'] === 'Kväll' && $titled->items[1]['title'] === 'Kväll' && $titled->location === 'Alingsås' && $titled->date === '2026-06-30');
+$blank = $parse(['originalNames' => '["a.jpg"]', 'category' => 'natur', 'location' => '   ', 'date' => ''], $pair(['full-a.webp'], ['thumb-a.webp']));
+check('blank location/date become null', $blank instanceof UploadRequest && $blank->location === null && $blank->date === null, json_encode($blank));
+
+$one = static fn () => $pair(['full-a.webp'], ['thumb-a.webp']);
+$oneName = ['originalNames' => '["a.jpg"]', 'category' => 'natur'];
+$cases = [
+    'body over post_max_size → 413 request_too_large' => [[$oneName, [], ['CONTENT_LENGTH' => '9000000']], 8_000_000, 0, [413, 'request_too_large']],
+    'not multipart → 400' => [[$oneName, $one(), ['CONTENT_TYPE' => 'application/json']], 0, 0, [400, 'invalid_request']],
+    'unknown form field → 400' => [[$oneName + ['storage_path' => '../x'], $one()], 0, 0, [400, 'invalid_request']],
+    'unknown file field → 400' => [[$oneName, $one() + ['extra' => $filesField(['full-a.webp'])]], 0, 0, [400, 'invalid_request']],
+    'no files → 400' => [[$oneName, []], 0, 0, [400, 'invalid_request']],
+    'missing thumbnail → 400' => [[$oneName, ['files' => $filesField(['full-a.webp'])]], 0, 0, [400, 'invalid_request']],
+    'extra thumbnail → 400' => [[['originalNames' => '["a.jpg"]', 'category' => 'natur'], $pair(['full-a.webp'], ['thumb-a.webp', 'thumb-b.webp'])], 0, 0, [400, 'invalid_request']],
+    'files dropped by max_file_uploads → 413 too_many_files' => [[$meta(), $pair(['full-a.webp', 'full-b.webp'], ['thumb-a.webp'])], 0, 3, [413, 'too_many_files']],
+    'malformed originalNames JSON → 400' => [[['originalNames' => '["a.jpg"', 'category' => 'natur'], $one()], 0, 0, [400, 'invalid_request']],
+    'originalNames count mismatch → 400' => [[['originalNames' => '["a.jpg","b.jpg"]', 'category' => 'natur'], $one()], 0, 0, [400, 'invalid_request']],
+    'originalNames not strings → 400' => [[['originalNames' => '[123]', 'category' => 'natur'], $one()], 0, 0, [400, 'invalid_request']],
+    'originalNames with control characters → 400' => [[['originalNames' => json_encode(["a\nb.jpg"]), 'category' => 'natur'], $one()], 0, 0, [400, 'invalid_request']],
+    'missing originalNames → 400' => [[['category' => 'natur'], $one()], 0, 0, [400, 'invalid_request']],
+    'missing category → 400' => [[['originalNames' => '["a.jpg"]'], $one()], 0, 0, [400, 'invalid_request']],
+    'category longer than 64 → 400' => [[['originalNames' => '["a.jpg"]', 'category' => str_repeat('k', 65)], $one()], 0, 0, [400, 'invalid_request']],
+    'title longer than 255 → 400' => [[$oneName + ['title' => str_repeat('t', 256)], $one()], 0, 0, [400, 'invalid_request']],
+    'location with control characters → 400' => [[$oneName + ['location' => "a\x07b"], $one()], 0, 0, [400, 'invalid_request']],
+    'impossible date → 400' => [[$oneName + ['date' => '2026-02-30'], $one()], 0, 0, [400, 'invalid_request']],
+    'wrong date format → 400' => [[$oneName + ['date' => '30/06/2026'], $one()], 0, 0, [400, 'invalid_request']],
+    'UPLOAD_ERR_INI_SIZE → 413' => [[$oneName, ['files' => $filesField(['full-a.webp'], [UPLOAD_ERR_INI_SIZE]), 'thumbnails' => $filesField(['thumb-a.webp'])]], 0, 0, [413, 'file_too_large']],
+    'UPLOAD_ERR_FORM_SIZE → 413' => [[$oneName, ['files' => $filesField(['full-a.webp'], [UPLOAD_ERR_FORM_SIZE]), 'thumbnails' => $filesField(['thumb-a.webp'])]], 0, 0, [413, 'file_too_large']],
+    'UPLOAD_ERR_PARTIAL → 400' => [[$oneName, ['files' => $filesField(['full-a.webp'], [UPLOAD_ERR_PARTIAL]), 'thumbnails' => $filesField(['thumb-a.webp'])]], 0, 0, [400, 'upload_incomplete']],
+    'UPLOAD_ERR_NO_FILE → 400' => [[$oneName, ['files' => $filesField(['full-a.webp'], [UPLOAD_ERR_NO_FILE]), 'thumbnails' => $filesField(['thumb-a.webp'])]], 0, 0, [400, 'invalid_request']],
+    'zero-byte image → 422' => [[$oneName, $pair(['empty.webp'], ['thumb-a.webp'])], 0, 0, [422, 'invalid_image']],
+];
+foreach ($cases as $label => [$args, $postMax, $maxUploads, $expected]) {
+    $r = $parse($args[0], $args[1], $args[2] ?? [], null, $postMax, $maxUploads);
+    check($label, $r === ['http' => $expected[0], 'code' => $expected[1]], json_encode($r));
+}
+$twentyOne = array_fill(0, 21, 'full-c.webp');
+$r = $parse(['originalNames' => json_encode(array_fill(0, 21, 'x.jpg')), 'category' => 'natur'], $pair($twentyOne, array_fill(0, 21, 'thumb-c.webp')));
+check('more than MAX_FILES_PER_REQUEST → 413 too_many_files', $r === ['http' => 413, 'code' => 'too_many_files'], json_encode($r));
+$small = UploadConfig::create($mediaRoot, 4_000, 20, 500 * 1024 * 1024);
+$r = $parse($oneName, $one(), [], $small);
+check('full image over MAX_UPLOAD_BYTES → 413 file_too_large', $r === ['http' => 413, 'code' => 'file_too_large'], json_encode($r));
+$bigThumb = $work . '/big-thumb.tmp';
+file_put_contents($bigThumb, str_repeat('x', UploadConfig::MAX_THUMB_BYTES + 1));
+$r = $parse($oneName, ['files' => $filesField(['full-a.webp']), 'thumbnails' => ['name' => ['t'], 'type' => ['image/webp'], 'tmp_name' => [$bigThumb], 'error' => [0], 'size' => [1]]]);
+check('thumbnail over 2 MiB → 413 (real file size, not the claimed size)', $r === ['http' => 413, 'code' => 'file_too_large'], json_encode($r));
+try {
+    UploadRequest::fromArrays($oneName, $one(), $multipart, $uploadConfig, true, 0, 0);
+    check('files not uploaded through HTTP are refused (is_uploaded_file)', false, 'accepted');
+} catch (HttpException $e) {
+    check('files not uploaded through HTTP are refused (is_uploaded_file)', $e->status === 400);
+}
+try {
+    $parse($oneName, ['files' => $filesField(['full-a.webp'], [UPLOAD_ERR_CANT_WRITE]), 'thumbnails' => $filesField(['thumb-a.webp'])]);
+    check('server-side upload errors become 500', false, 'no exception');
+} catch (RuntimeException) {
+    check('server-side upload errors become 500', true);
+}
+check('ini size parsing', UploadRequest::iniBytes('8M') === 8_388_608 && UploadRequest::iniBytes('2G') === 2_147_483_648 && UploadRequest::iniBytes('512K') === 524_288 && UploadRequest::iniBytes('-1') === 0);
+
+echo "\nPhoto upload: storage, validation, transaction (SQLite + temporary media)\n";
+
+/** An SQLite database with the photo/category columns the uploader uses. */
+$sqlite = static function (): PDO {
+    $pdo = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+    $pdo->exec('CREATE TABLE categories (id TEXT PRIMARY KEY, `key` TEXT UNIQUE NOT NULL, label TEXT, created_at TEXT)');
+    $pdo->exec('CREATE TABLE photos (id TEXT PRIMARY KEY, name TEXT NOT NULL, storage_path TEXT NOT NULL UNIQUE, category TEXT NOT NULL REFERENCES categories(`key`),
+        title TEXT, location TEXT, `date` TEXT, created_at TEXT NOT NULL, is_hero INTEGER NOT NULL DEFAULT 0, thumb_path TEXT, width INTEGER, height INTEGER, bytes INTEGER, mime TEXT)');
+    $pdo->exec("INSERT INTO categories VALUES ('c1', 'natur', 'Natur', '2026-01-01 00:00:00'), ('c2', 'okategoriserad', 'Okategoriserad', '2026-01-01 00:00:00'), ('c3', 'porträtt', 'Porträtt', '2026-01-01 00:00:00')");
+    // Lets a test make one specific insert fail after files are in place.
+    $pdo->exec("CREATE TRIGGER fail_on_demand BEFORE INSERT ON photos WHEN NEW.name = 'fail-me.jpg' BEGIN SELECT RAISE(ABORT, 'forced failure'); END");
+    return $pdo;
+};
+$copyMover = static fn (string $from, string $to): bool => copy($from, $to);
+$fixedClock = static fn (): int => 1_781_469_636_000_000;
+$devNull = new Logger($work . '/logs', 'smoke');
+
+/** Snapshot of every file under a directory (relative path → sha256). */
+$tree = static function (string $dir): array {
+    $out = [];
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)) as $f) {
+        $out[str_replace('\\', '/', substr($f->getPathname(), strlen($dir) + 1))] = hash_file('sha256', $f->getPathname());
+    }
+    ksort($out);
+    return $out;
+};
+
+// Pre-existing media that must never be touched: a hero and an old photo.
+mkdir($mediaRoot . '/hero', 0700, true);
+mkdir($mediaRoot . '/uploads/thumbs', 0700, true);
+copy($fx['full-c.webp'], $mediaRoot . '/hero/existing-hero.webp');
+copy($fx['full-a.webp'], $mediaRoot . '/uploads/existing-photo.webp');
+copy($fx['thumb-a.webp'], $mediaRoot . '/uploads/thumbs/existing-photo.webp');
+$before = $tree($mediaRoot);
+
+/** Runs one upload; returns ['ids' => …] or ['http' => …, 'code' => …] / ['error' => class]. */
+$runUpload = static function (PDO $pdo, array $post, array $files, array $opts = []) use ($parse, $uploadConfig, $copyMover, $fixedClock, $devNull, $mediaRoot): array {
+    $request = $parse($post, $files, [], $opts['config'] ?? null);
+    if (!$request instanceof UploadRequest) {
+        return $request;
+    }
+    $config = $opts['config'] ?? $uploadConfig;
+    $store = new MediaStore($config->mediaDir, $opts['uuid'] ?? null);
+    $uploader = new PhotoUploader($pdo, $store, $config, $devNull, $opts['mover'] ?? $copyMover, $fixedClock);
+    try {
+        return ['ids' => $uploader->upload($request), 'created' => $store->created()];
+    } catch (HttpException $e) {
+        return ['http' => $e->status, 'code' => $e->errorCode];
+    } catch (Throwable $e) {
+        return ['error' => get_class($e)];
+    }
+};
+
+$pdo = $sqlite();
+$photoCount = static fn (PDO $p): int => (int) $p->query('SELECT COUNT(*) FROM photos')->fetchColumn();
+
+// Success: three photos, Swedish category.
+$names = ['IMG_1.JPG', 'Midsommar.png', 'kväll.heic'];
+$result = $runUpload($pdo, ['originalNames' => json_encode($names), 'category' => 'porträtt', 'location' => 'Skåne', 'date' => '2026-06-20'],
+    $pair(['full-a.webp', 'full-b.webp', $vp8x], ['thumb-a.webp', 'thumb-b.webp', 'thumb-c.webp']));
+$ids = $result['ids'] ?? [];
+check('valid batch is stored', count($ids) === 3, json_encode($result));
+$rows = $pdo->query('SELECT * FROM photos ORDER BY created_at ASC')->fetchAll();
+check('three rows inserted', count($rows) === 3);
+$uuidRe = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/';
+$allGood = true;
+foreach ($rows as $i => $row) {
+    $id = $row['id'];
+    $allGood = $allGood
+        && preg_match($uuidRe, $id)
+        && $row['storage_path'] === "uploads/$id.webp"
+        && $row['thumb_path'] === "uploads/thumbs/$id.webp"
+        && $row['name'] === $names[$i]
+        && $row['category'] === 'porträtt' && $row['location'] === 'Skåne' && $row['date'] === '2026-06-20'
+        && (int) $row['is_hero'] === 0 && $row['mime'] === 'image/webp';
+}
+check('rows: UUID v4 ids, paired paths, original names, batch metadata, is_hero 0', $allGood, json_encode($rows[0] ?? null));
+check('title falls back per file', array_column($rows, 'title') === ['IMG_1', 'Midsommar', 'kväll']);
+$fullFixtures = ['full-a.webp', 'full-b.webp', $vp8x];
+$thumbFixtures = ['thumb-a.webp', 'thumb-b.webp', 'thumb-c.webp'];
+$hashesOk = true;
+foreach ($rows as $i => $row) {
+    $hashesOk = $hashesOk
+        && hash_file('sha256', $mediaRoot . '/' . $row['storage_path']) === hash_file('sha256', $fx[$fullFixtures[$i]])
+        && hash_file('sha256', $mediaRoot . '/' . $row['thumb_path']) === hash_file('sha256', $fx[$thumbFixtures[$i]]);
+}
+check('stored files are byte-identical to the uploads (SHA-256)', $hashesOk);
+$dims = array_map(static fn ($r) => [(int) $r['width'], (int) $r['height'], (int) $r['bytes']], $rows);
+check('width/height/bytes describe the full image', $dims === [[1600, 1200, filesize($fx['full-a.webp'])], [1200, 2000, filesize($fx['full-b.webp'])], [getimagesize($fx[$vp8x])[0], getimagesize($fx[$vp8x])[1], filesize($fx[$vp8x])]], json_encode($dims));
+check('created_at: UTC, microseconds, strictly increasing in upload order',
+    array_column($rows, 'created_at') === ['2026-06-14 20:40:36.000000', '2026-06-14 20:40:36.000001', '2026-06-14 20:40:36.000002']);
+$catalog = new PublicCatalog($pdo, new PublicUrls('http://pixelmani.test', '/media'));
+$presented = $catalog->photosByIds($ids);
+check('response shape matches GET /api/photos (newest first, url + thumb_url)',
+    count($presented) === 3 && $presented[0]['id'] === $ids[2]
+    && $presented[0]['url'] === "http://pixelmani.test/media/uploads/{$ids[2]}.webp"
+    && $presented[0]['thumb_url'] === "http://pixelmani.test/media/uploads/thumbs/{$ids[2]}.webp"
+    && $presented[0]['is_hero'] === false && $presented[0]['width'] === getimagesize($fx[$vp8x])[0] && array_keys($presented[0]) === array_keys($catalog->photos(1)[0]));
+$afterSuccess = $tree($mediaRoot);
+check('pre-existing media untouched', array_intersect_key($afterSuccess, $before) === $before);
+check('exactly 6 new files (3 full + 3 thumbs)', count($afterSuccess) - count($before) === 6);
+
+// Category rules.
+$r = $runUpload($pdo, ['originalNames' => '["a.jpg"]', 'category' => 'okategoriserad'], $one());
+check('okategoriserad is accepted when sent explicitly', count($r['ids'] ?? []) === 1, json_encode($r));
+$stateBefore = [$photoCount($pdo), $tree($mediaRoot)];
+$r = $runUpload($pdo, ['originalNames' => '["a.jpg"]', 'category' => 'finns-inte'], $one());
+check('unknown category → 422 unknown_category', $r === ['http' => 422, 'code' => 'unknown_category']);
+check('… and nothing written', [$photoCount($pdo), $tree($mediaRoot)] === $stateBefore);
+
+// Content and dimension rejections: nothing may be written.
+$rejections = [
+    'MIME spoof (text claimed as image/webp)' => [['text-renamed.webp'], ['thumb-a.webp'], 'invalid_image'],
+    'SVG renamed .webp' => [['svg-renamed.webp'], ['thumb-a.webp'], 'invalid_image'],
+    'JPEG renamed .webp' => [['jpeg-renamed.webp'], ['thumb-a.webp'], 'invalid_image'],
+    'PNG renamed .webp (as thumbnail)' => [['full-a.webp'], ['png-renamed.webp'], 'invalid_image'],
+    'WebP header + PHP polyglot' => [['header-polyglot.webp'], ['thumb-a.webp'], 'invalid_image'],
+    'truncated WebP' => [['truncated.webp'], ['thumb-a.webp'], 'invalid_image'],
+    'WebP with trailing data' => [['trailing-data.webp'], ['thumb-a.webp'], 'invalid_image'],
+    'full image wider than 2000 px' => [['full-too-wide.webp'], ['thumb-a.webp'], 'image_dimensions'],
+    'thumbnail taller than 600 px' => [['full-a.webp'], ['thumb-too-tall.webp'], 'image_dimensions'],
+    'full image used as thumbnail (1600 px)' => [['full-a.webp'], ['full-a.webp'], 'image_dimensions'],
+    'bad file in the 2nd of 2 photos' => [['full-a.webp', 'svg-renamed.webp'], ['thumb-a.webp', 'thumb-b.webp'], 'invalid_image'],
+];
+if (isset($fx['animated-flag.webp'])) {
+    $rejections['animated WebP'] = [['animated-flag.webp'], ['thumb-a.webp'], 'invalid_image'];
+}
+foreach ($rejections as $label => [$fulls, $thumbs, $code]) {
+    $stateBefore = [$photoCount($pdo), $tree($mediaRoot)];
+    $r = $runUpload($pdo, ['originalNames' => json_encode(array_fill(0, count($fulls), 'x.jpg')), 'category' => 'natur'], $pair($fulls, $thumbs));
+    check("$label → 422 $code, nothing written", $r === ['http' => 422, 'code' => $code] && [$photoCount($pdo), $tree($mediaRoot)] === $stateBefore, json_encode($r));
+}
+
+// Database failure after files were moved: everything from this request is removed.
+$stateBefore = [$photoCount($pdo), $tree($mediaRoot)];
+$r = $runUpload($pdo, ['originalNames' => json_encode(['ok-1.jpg', 'fail-me.jpg', 'ok-3.jpg']), 'category' => 'natur'], $pair(['full-a.webp', 'full-b.webp', 'full-c.webp'], ['thumb-a.webp', 'thumb-b.webp', 'thumb-c.webp']));
+check('insert failure on photo 2 of 3 → error, transaction rolled back', isset($r['error']) && $photoCount($pdo) === $stateBefore[0], json_encode($r));
+check('… every file of the failed batch removed, pre-existing files kept', $tree($mediaRoot) === $stateBefore[1]);
+check('… no transaction left open', !$pdo->inTransaction());
+
+// Move failure partway: the files already moved are removed.
+$calls = 0;
+$failingMover = static function (string $from, string $to) use (&$calls): bool {
+    return ++$calls === 3 ? false : copy($from, $to);
+};
+$stateBefore = [$photoCount($pdo), $tree($mediaRoot)];
+$r = $runUpload($pdo, ['originalNames' => json_encode(['a.jpg', 'b.jpg']), 'category' => 'natur'], $pair(['full-a.webp', 'full-b.webp'], ['thumb-a.webp', 'thumb-b.webp']), ['mover' => $failingMover]);
+check('file-move failure on file 3 of 4 → error, nothing kept', isset($r['error']) && [$photoCount($pdo), $tree($mediaRoot)] === $stateBefore, json_encode($r));
+
+// Name collisions: an existing file or row is skipped, never overwritten.
+$existingRowId = $ids[0];
+$existingFileId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+copy($fx['thumb-c.webp'], $mediaRoot . "/uploads/$existingFileId.webp");
+$guard = hash_file('sha256', $mediaRoot . "/uploads/$existingFileId.webp");
+$queue = [$existingRowId, $existingFileId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'];
+$r = $runUpload($pdo, ['originalNames' => '["a.jpg"]', 'category' => 'natur'], $one(), ['uuid' => static function () use (&$queue): string { return array_shift($queue); }]);
+check('UUIDs already used by a row or a file are skipped', ($r['ids'] ?? null) === ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'], json_encode($r));
+check('the existing file was not overwritten', hash_file('sha256', $mediaRoot . "/uploads/$existingFileId.webp") === $guard);
+
+// Race guard: if a file appears at a reserved path after reservation, it is never overwritten.
+$raceStore = new MediaStore(realpath($mediaRoot));
+$racePath = 'uploads/cccccccc-cccc-4ccc-8ccc-cccccccccccc.webp';
+file_put_contents($mediaRoot . '/' . $racePath, "someone else's file");
+try {
+    $raceStore->place($fx['full-a.webp'], $racePath, $copyMover, filesize($fx['full-a.webp']));
+    check('placing onto an existing file fails (exclusive create)', false, 'overwrote');
+} catch (RuntimeException) {
+    check('placing onto an existing file fails (exclusive create)',
+        file_get_contents($mediaRoot . '/' . $racePath) === "someone else's file" && $raceStore->created() === []);
+}
+unlink($mediaRoot . '/' . $racePath);
+try {
+    $raceStore->place($fx['full-a.webp'], '../outside.webp', $copyMover, 1);
+    check('placing outside MEDIA_DIR is refused', false, 'accepted');
+} catch (Throwable) {
+    check('placing outside MEDIA_DIR is refused', !file_exists(dirname($mediaRoot) . '/outside.webp'));
+}
+
+// Path containment: a generator returning anything but a UUID is refused.
+$r = $runUpload($pdo, ['originalNames' => '["a.jpg"]', 'category' => 'natur'], $one(), ['uuid' => static fn (): string => '../../evil']);
+check('non-UUID generated name is refused before any write', isset($r['error']) && !file_exists(dirname($mediaRoot) . '/evil.webp'));
+
+echo "\nPhoto upload: quota\n";
+
+$quotaRoot = tempDir();
+mkdir($quotaRoot . '/media/hero', 0700, true);
+mkdir($quotaRoot . '/media/uploads/thumbs', 0700, true);
+mkdir($quotaRoot . '/storage', 0700, true);
+copy($fx['full-a.webp'], $quotaRoot . '/media/hero/h.webp');
+copy($fx['thumb-a.webp'], $quotaRoot . '/media/uploads/thumbs/t.webp');
+file_put_contents($quotaRoot . '/storage/big-private-file.log', str_repeat('x', 5_000_000)); // must not count
+$existing = filesize($fx['full-a.webp']) + filesize($fx['thumb-a.webp']);
+$batch = filesize($fx['full-c.webp']) + filesize($fx['thumb-c.webp']);
+check('used bytes count hero + thumbnails, not private storage', (new MediaStore(realpath($quotaRoot . '/media')))->usedBytes() === $existing);
+$exactFit = UploadConfig::create($quotaRoot . '/media', 15 * 1024 * 1024, 20, $existing + $batch);
+$oneShort = UploadConfig::create($quotaRoot . '/media', 15 * 1024 * 1024, 20, $existing + $batch - 1);
+$qpdo = $sqlite();
+$before = $tree($quotaRoot . '/media');
+$r = $runUpload($qpdo, ['originalNames' => '["a.jpg"]', 'category' => 'natur'], $pair(['full-c.webp'], ['thumb-c.webp']), ['config' => $oneShort]);
+check('batch crossing the quota by 1 byte → 507 quota_exceeded', $r === ['http' => 507, 'code' => 'quota_exceeded'], json_encode($r));
+check('… rejected before any write', $tree($quotaRoot . '/media') === $before && $photoCount($qpdo) === 0);
+$r = $runUpload($qpdo, ['originalNames' => '["a.jpg"]', 'category' => 'natur'], $pair(['full-c.webp'], ['thumb-c.webp']), ['config' => $exactFit]);
+check('batch exactly filling the quota succeeds', count($r['ids'] ?? []) === 1, json_encode($r));
+$r = $runUpload($qpdo, ['originalNames' => '["a.jpg","b.jpg"]', 'category' => 'natur'], $pair(['full-c.webp', 'full-c.webp'], ['thumb-c.webp', 'thumb-c.webp']), ['config' => UploadConfig::create($quotaRoot . '/media', 15 * 1024 * 1024, 20, $existing + 2 * $batch)]);
+check('the whole incoming batch is counted (2 photos vs room for 1)', $r === ['http' => 507, 'code' => 'quota_exceeded'], json_encode($r));
+removeTree($quotaRoot);
+
+echo "\nPhoto upload: real MySQL (runtime user, temporary media)\n";
+
+try {
+    $config = Config::load(dirname(__DIR__), dirname(__DIR__, 2));
+    $mysql = (new Database($config, new Logger(sys_get_temp_dir(), 'smoke')))->pdo();
+    $myMedia = tempDir();
+    $myConfig = UploadConfig::create($myMedia, 15 * 1024 * 1024, 20, 500 * 1024 * 1024);
+    $rowsBefore = (int) $mysql->query('SELECT COUNT(*) FROM photos')->fetchColumn();
+    $catalogBefore = json_encode((new PublicCatalog($mysql, new PublicUrls('http://x', '/media')))->photos());
+
+    // Success, then clean up exactly what was added.
+    $r = $runUpload($mysql, ['originalNames' => json_encode(['mysql-a.jpg', 'mysql-b.jpg']), 'category' => 'okategoriserad'], $pair(['full-a.webp', 'full-b.webp'], ['thumb-a.webp', 'thumb-b.webp']), ['config' => $myConfig]);
+    $newIds = $r['ids'] ?? [];
+    check('MySQL: batch stored', count($newIds) === 2, json_encode($r));
+    $stmt = $mysql->prepare('SELECT created_at, is_hero, mime, width FROM photos WHERE id = ?');
+    $stmt->execute([$newIds[1] ?? '']);
+    $row = $stmt->fetch();
+    check('MySQL: DATETIME(6) keeps microseconds, is_hero 0, mime, width', ($row['created_at'] ?? '') === '2026-06-14 20:40:36.000001' && (int) $row['is_hero'] === 0 && $row['mime'] === 'image/webp' && (int) $row['width'] === 1200, json_encode($row));
+    $delete = $mysql->prepare('DELETE FROM photos WHERE id = ?');
+    foreach ($newIds as $id) {
+        $delete->execute([$id]);
+    }
+
+    // Conflict: another writer takes the reserved ID between reservation and insert.
+    $calls = 0;
+    $racingMover = static function (string $from, string $to) use (&$calls, $mysql): bool {
+        if (++$calls === 3) {
+            $id = basename($to, '.webp');
+            $mysql->prepare("INSERT INTO photos (id, name, storage_path, category, created_at) VALUES (?, 'race', ?, 'okategoriserad', UTC_TIMESTAMP(6))")
+                ->execute([$id, "uploads/race-$id.webp"]);
+        }
+        return copy($from, $to);
+    };
+    $mediaBefore = $tree($myMedia);
+    $r = $runUpload($mysql, ['originalNames' => json_encode(['x.jpg', 'y.jpg']), 'category' => 'okategoriserad'], $pair(['full-a.webp', 'full-b.webp'], ['thumb-a.webp', 'thumb-b.webp']), ['config' => $myConfig, 'mover' => $racingMover]);
+    check('MySQL: duplicate-key conflict mid-batch → error, rolled back', isset($r['error']));
+    check('MySQL: … this request\'s files removed', $tree($myMedia) === $mediaBefore);
+    $mysql->exec("DELETE FROM photos WHERE name = 'race'");
+    check('MySQL: dataset unchanged after tests', (int) $mysql->query('SELECT COUNT(*) FROM photos')->fetchColumn() === $rowsBefore
+        && json_encode((new PublicCatalog($mysql, new PublicUrls('http://x', '/media')))->photos()) === $catalogBefore);
+    removeTree($myMedia);
+} catch (Throwable $e) {
+    check('MySQL upload checks', false, get_class($e) . ': ' . $e->getMessage());
+}
+
+removeTree($mediaRoot);
+removeTree($work);
+removeTree($fixtureDir);
 
 // ── Database (read-only, real local configuration) ─────────────────────────
 
