@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated Loopia deployment package (npm run package:loopia).
+    "dist/**",
   ]),
 ]);
 

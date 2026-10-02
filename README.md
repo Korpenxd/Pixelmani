@@ -84,9 +84,27 @@ node php/dev/serve-static.mjs stop
 
 ## Drift
 
-Apache + PHP 8.3 + MariaDB/MySQL. Ingen Node.js. `php/vendor/` (PHPMailer) byggs med `composer install --no-dev` och följer med i driftpaketet, så servern behöver inte Composer. Kontaktformuläret kräver ett riktigt e-postkonto hos Loopia: SMTP via `mailcluster.loopia.se`, port 587, STARTTLS.
+Apache + PHP 8.2+ + MariaDB/MySQL. Ingen Node.js, ingen Composer på servern och ingen Supabase.
 
-Säkerhetsheaders, omdirigeringen `www` → apex och regler för rena URL:er (`/showcase` → `showcase.html`) ska ligga i Apache. De sattes tidigare av Next.js. Exakta värden och krav finns under **Apache handoff** i [`php/README.md`](php/README.md#apache-handoff-phase-10).
+```bash
+npm run package:loopia   # bygge + driftpaket + ZIP i dist/loopia/ (gitignorerat)
+npm run serve:package    # testa paketet lokalt med Apache + PHP, utan Node
+npm run test:package     # HTTP-test av omdirigeringar, headers, 404, API och skyddade sökvägar
+```
+
+- **Paketet:** `dist/loopia/pixelmani-loopia-precutover/` innehåller allt servern behöver utom den hemliga konfigurationen och den slutliga data- och bildsynken. Det består av:
+  - den privata PHP-delen: `bootstrap.php`, `src/`, `vendor/` med PHPMailer från `composer.lock`, `config/` och `storage/`
+  - webbroten `public/`: den statiska sajten, `api/` och `media/`
+- **Produktionsreglerna för Apache:** de ligger i [`deploy/loopia/public/.htaccess`](deploy/loopia/public/.htaccess):
+  - https och `www` → `https://pixelmani.se`
+  - rena URL:er (`/showcase` → `showcase.html`)
+  - 404-sidor
+  - säkerhetsheaders (tidigare satta av Next.js)
+  - cache
+  - PHP bara under `/api`
+- **Uppladdning, konfiguration och kontroller hos Loopia:** se [`deploy/loopia/DEPLOY.md`](deploy/loopia/DEPLOY.md), som också följer med i paketet.
+- **Kontaktformuläret:** kräver ett riktigt e-postkonto hos Loopia, SMTP via `mailcluster.loopia.se`, port 587, STARTTLS.
+- **Detaljer:** se "Production" i [`php/README.md`](php/README.md#production-apache-rules-and-the-loopia-package).
 
 ## Produktionsdomän
 
@@ -97,7 +115,7 @@ Domänen används för canonical-länkar, `sitemap.xml`, `robots.txt`, Open Grap
 Ska domänen bytas:
 1. Ändra `NEXT_PUBLIC_SITE_URL` och `PRODUCTION_SITE_URL` i `lib/site.ts`.
 2. Ändra `SITE_URL` för PHP-backenden.
-3. Ändra Apache-omdirigeringen `www` → apex.
+3. Ändra domänen i [`deploy/loopia/public/.htaccess`](deploy/loopia/public/.htaccess) (omdirigering och HSTS).
 4. Bygg om.
 
 ## Adress och verksamhetsområde
@@ -134,6 +152,9 @@ Fyll i **titel** och **plats** på varje bild i adminpanelen — de används som
 npm run dev            # utveckling (bakom Laragons Apache, se ovan)
 npm run build          # statisk export till out/
 npm run serve:static   # testa out/ lokalt med Apache + PHP, utan Node
+npm run package:loopia # driftpaket för Loopia (dist/loopia/)
+npm run serve:package  # testa driftpaketet lokalt
+npm run test:package   # HTTP-test mot driftpaketet
 npm test               # enhetstester för adminlogiken
 npm run lint           # eslint
 npx tsc --noEmit       # typkontroll

@@ -5,8 +5,9 @@ import type { NextConfig } from 'next'
  * out/, which Apache serves next to the PHP API (/api) and the photo files
  * (/media). No Node.js server runs in production.
  *
- * Things a Next.js server used to do here now belong to Apache (Phase 10;
- * see "Apache handoff" in php/README.md):
+ * Things a Next.js server used to do here now belong to Apache: the
+ * production rules in deploy/loopia/public/.htaccess (see "Production" in
+ * php/README.md):
  *   - security headers (CSP, HSTS, nosniff, Referrer-Policy,
  *     Permissions-Policy, X-Frame-Options)
  *   - the www.pixelmani.se → pixelmani.se redirect

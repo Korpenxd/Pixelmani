@@ -62,7 +62,16 @@ php/
   storage/rate-limit/    login and contact-form rate-limit state (gitignored)
   tests/smoke.php        local smoke tests
   tests/upload-fixtures.php   generates local upload test images (uses GD; tests only)
-  dev/apache-vhost.local.conf   Laragon vhost (local development only)
+  dev/apache-vhost.local.conf     Laragon vhost (local development only)
+  dev/apache-static.local.conf    `npm run serve:static`: out/ + PHP, no Node (local test)
+  dev/apache-package.local.conf   `npm run serve:package`: the assembled deployment package (local test)
+  dev/serve-static.mjs            starts/stops those two test servers
+  dev/test-package-http.mjs       `npm run test:package`: HTTP matrix against the package
+
+deploy/loopia/           production overlay copied into the package by scripts/package-loopia.mjs:
+  public/.htaccess       the production Apache rules (+ public/api/, public/media/)
+  config/config.example.php   production config template
+  DEPLOY.md              upload mapping, config, Loopia checks, cutover order
 ```
 
 `config/`, `src/`, `storage/` and `tests/` each contain a deny-all `.htaccess`
@@ -86,7 +95,7 @@ layout keeps them outside it.
 | `SESSION_IDLE_SECONDS` | no | Default `1800` (60–86400) |
 | `COOKIE_SECURE` | no | Default `true`, or `false` with `APP_ENV=local`. `false` is refused outside local. |
 | `LOGIN_RATE_LIMIT_MAX` / `LOGIN_RATE_LIMIT_WINDOW` | no | Default 5 failed logins per 900 s per IP |
-| `MEDIA_DIR` | no | Filesystem directory served at `UPLOAD_URL_BASE`. Default `php/public` + `UPLOAD_URL_BASE`. Must exist and be writable. |
+| `MEDIA_DIR` | no | Filesystem directory served at `UPLOAD_URL_BASE`. Default `<application root>/public` + `UPLOAD_URL_BASE` (`php/public/media`; in the package `public/media`). A relative path is resolved against the application root, e.g. `public_html/media` when the host's web root is not called `public`. Must exist and be writable. |
 | `MAX_UPLOAD_BYTES` | no | Per full-size image, default `15728640` (15 MiB). Thumbnails are capped at 2 MiB. |
 | `MAX_FILES_PER_REQUEST` | no | Photos per upload request, default `20` (1–100) |
 | `SMTP_HOST` | contact only | SMTP server. Production: `mailcluster.loopia.se`. Locally: Mailpit `127.0.0.1`. |
@@ -899,8 +908,8 @@ The vhost rewrite is for local development only. It maps these to
   `hero`
 
 Other groups, deeper paths and upper-case endpoint names are not rewritten
-(404). Reload Apache in Laragon after changing it. Production Apache rules are
-written in a later phase.
+(404). Reload Apache in Laragon after changing it. The production rules are
+in `deploy/loopia/public/.htaccess` (see "Production" below).
 
 On Windows, Apache matches the case of existing directories case-insensitively
 (`/api/admin/Photos/update` still works locally). Linux hosting is
@@ -933,87 +942,128 @@ logs go to the system temp folder.
   `db/` and `.env*` all give 404.
 - **Origin:** a local-only `SetEnv SITE_URL` gives PHP the `:8090` origin, so
   admin login and CSRF work there.
-- **Headers:** the security headers from the Apache handoff below are sent,
+- **Headers:** the production security headers (see "Production" below) are sent,
   except HSTS and `upgrade-insecure-requests`, which need https.
 - **Environment overrides:** `PIXELMANI_HTTPD`, `PIXELMANI_MOD_PHP_CONF` and
   `PIXELMANI_STATIC_PORT`.
 
-## Apache handoff (Phase 10)
+## Production: Apache rules and the Loopia package
 
-Next.js no longer serves the site, so everything `next.config.ts` used to do
-at runtime must be done by Apache in production. **These are required**,
-otherwise the move to static hosting would weaken security or break URLs.
+Next.js does not run in production, so Apache does everything `next.config.ts`
+used to do at runtime: security headers, the canonical host, clean URLs. The
+rules and everything else the server needs come from one command:
 
-### Security headers (were `headers()` in `next.config.ts`, for every path)
+```bash
+npm run package:loopia        # build + package + ZIP (PHP/MySQL must be running for the build)
+npm run serve:package         # serve the assembled package locally (Apache + PHP, no Node)
+npm run test:package          # HTTP matrix against it
+node php/dev/serve-static.mjs stop
+```
 
-| Header | Value | Local static test |
+### Apache configurations and what each is for
+
+| File | Used by | Purpose |
 | --- | --- | --- |
-| `Content-Security-Policy` | `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests` | yes, without `upgrade-insecure-requests` |
-| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains` | no (https only) |
-| `X-Content-Type-Options` | `nosniff` | yes |
-| `Referrer-Policy` | `strict-origin-when-cross-origin` | yes |
-| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), browsing-topics=()` | yes |
-| `X-Frame-Options` | `DENY` | yes |
+| `php/dev/apache-vhost.local.conf` | `npm run dev` (Laragon) | development: `/api` and `/media` from PHP, everything else proxied to `next dev` |
+| `php/dev/apache-static.local.conf` | `npm run serve:static` | `out/` from the repository, no Node |
+| `php/dev/apache-package.local.conf` | `npm run serve:package` | the assembled package with its **own production `.htaccess` files** |
+| `deploy/loopia/public/.htaccess` (+ `api/`, `media/`) | Loopia | the **production** rules, copied into the package |
 
-- **Supabase hosts removed from the CSP:** they were the Supabase project URL
-  in `img-src` and `connect-src`, and its `wss://` host. Nothing loads from
-  Supabase any more.
-- **`'unsafe-inline'` in `script-src`:** still needed, because the static
-  export inlines its hydration data in `<script>` tags.
-- **Where to set them:** destination is the production `.htaccess` /
-  vhost, for every response including `/api` and `/media`.
-- **nosniff duplicates:** use `Header always set`. PHP also sends `nosniff`,
-  so add `Header unset X-Content-Type-Options` first, or the API sends it twice
-  (see the static test config).
+### The package
 
-### Redirect (was `redirects()` in `next.config.ts`)
+`scripts/package-loopia.mjs` builds `dist/loopia/pixelmani-loopia-precutover/`
+(gitignored, recreated from scratch every run) and a ZIP of it:
 
-- `www.pixelmani.se/*` → `https://pixelmani.se/*`, permanent (Next sent 308;
-  301 is fine). Keep the canonical host single.
-- Also needed in Phase 10: http → https.
+```
+pixelmani-loopia-precutover/   PRIVATE root → the folder above the web root
+  bootstrap.php  src/  vendor/  config/config.example.php  storage/ (empty)
+  DEPLOY.md  MANIFEST.json  SHA256SUMS  .htaccess (deny-all safety net)
+  public/                      PUBLIC root → the web root
+    .htaccess  index.html  showcase.html  admin.html  404.html  _next/ …
+    api/       the entry points + .htaccess + not-found.json
+    media/     uploads/  uploads/thumbs/  hero/  + .htaccess
+```
 
-### Clean URLs and export layout
+- **Private and public:** the private runtime sits outside the web root. The
+  entry points load `../../bootstrap.php`, so the folder above the web root
+  must be the private root.
+- **Web root not called `public`:** set `MEDIA_DIR` relative to the
+  application root, e.g. `public_html/media`. See "Configuration".
+- **Composer:** `vendor/` is installed into the package from `composer.lock`
+  (`--no-dev --prefer-dist --optimize-autoloader --classmap-authoritative`).
+  The script checks it against the lock and fails on any difference or dev
+  package. The server never needs Composer.
+- **Copy by whitelist:** only the runtime is copied. A check then fails the
+  run on anything that must not ship: `.env*`, tests, tools, dev configs,
+  source maps, logs, sessions, rate-limit state, notes, build manifests, and
+  PHP outside `public/api`.
+- **Leak scan:**
+  - it fails on local paths, local host names, Mailpit, Supabase, JWTs,
+    password hashes, private keys, session ids and migration-bundle
+    references
+  - it compares against the values in the local env files without printing
+    them
+  - a short allowlist names the exact harmless snippets, such as PHPMailer's
+    `localhost` default and doc comments
+- **Media:** a snapshot of `php/public/media` for testing; `--no-media` gives
+  empty directories. Only managed WebP names are accepted. The final media
+  copy happens at cutover.
+- **Manifest:** `MANIFEST.json` records the source commit, toolchain, the
+  Composer lock hash and packages, file counts and key checksums.
+  `SHA256SUMS` covers every file.
+- **ZIP:** written by the script itself, deterministic, with Unix
+  permissions (0644 / 0755), empty directories kept, and verified by reading
+  it back.
+- **Routes:** every API entry point must have exactly one route in the
+  production `.htaccess`, and vice versa; otherwise the run fails.
+- **Before uploading:** see `deploy/loopia/DEPLOY.md`, which is also in the
+  package. It covers the upload mapping, the config, writable directories,
+  the Loopia checks and the cutover order.
 
-- **No trailing slash (`trailingSlash: false`):** Next writes
-  `showcase.html` and `admin.html`, each next to a `showcase/` or `admin/`
-  directory of navigation payloads. Canonical URLs stay `/showcase` and
-  `/admin`.
-- **Apache rules:**
-  - map `/<path>` → `/<path>.html` when that file exists
-  - set `DirectorySlash Off` for the export, so `/admin` is not redirected
-    to the directory
-  - 301 `/<path>/` → `/<path>`
-  - `ErrorDocument 404 /404.html`
+### What the production `.htaccess` does
 
-  `php/dev/apache-static.local.conf` has working local versions.
-- **Navigation payloads:** `*.txt` and `__next.*` files must be served as
-  `text/plain` (Apache's default for `.txt`).
-- **Windows builds:** on Windows, Next 16.2.7 misplaces the page segment
-  payloads (`__next.showcase/__PAGE__.txt` instead of
-  `__next.showcase.__PAGE__.txt`). `npm run build` runs
+| Area | Behaviour |
+| --- | --- |
+| Canonical host | For `pixelmani.se` / `www.pixelmani.se` only: http → https and www → apex, path and query kept, **one** 301. Combined with the clean-URL redirects, so `http://www…/showcase/` is one hop. Other hosts (local tests) are never redirected to production. |
+| HTTPS detection | `%{HTTPS}`, or `X-Forwarded-Proto: https` for a TLS-terminating proxy. Faking the header only skips the visitor's own redirect. |
+| Clean URLs | `/showcase` → `showcase.html` internally. `/showcase/`, `/showcase.html`, `/index`, `/index.html` → 301 to the clean URL. `DirectorySlash Off`, `AcceptPathInfo Off`. |
+| 404 | Unknown pages → `404.html` with status 404. `/404` and `/404.html` are not pages. Under `/api`: the JSON `{"ok":false,"error":{"code":"not_found",…}}`. |
+| API | Only the listed entry points, as `/api/<name>`. Direct `*.php`, unknown names and directories → JSON 404. Methods are left to the endpoints (405 JSON). |
+| Methods outside `/api` | GET, HEAD, OPTIONS; anything else 405. Apache would otherwise answer POST to a static file with the file. |
+| PHP execution | Script extensions (`.php`, `.phtml`, `.phar`, `.php5` …) are denied everywhere except `/api`. `api/.htaccess` denies every script type but `.php`. `media/.htaccess` serves only `*.webp` with plain names (no `x.php.webp`) and removes handlers. |
+| Private paths | Denied **inside** the web root too, as defence in depth (the real files are outside it): dotfiles except `.well-known`, dumps, logs, archives, source maps, Composer/npm manifests, `sess_*`, and folders named like the private ones (`src/`, `vendor/`, `config/`, `storage/` …). |
+| Headers | On every response: CSP, X-Content-Type-Options (exactly once; PHP's copy is replaced), Referrer-Policy, Permissions-Policy, X-Frame-Options. `upgrade-insecure-requests` and HSTS only over https; HSTS only for the production names. |
+| Cache | `/_next/static/*` and `/media/*`: one year, immutable (200 only, never on a 404). Icons and the sharing image: one day. HTML, `*.txt` payloads, robots, sitemap, error pages and redirects: `no-cache`. `/api`: the endpoints decide (`no-store` for admin and contact, `no-cache` for public reads and the hero redirect). |
+
+- **AllowOverride:** the rules need FileInfo, Indexes, Options and
+  AuthConfig. `serve:package` runs with exactly that minimum.
+- **MultiViews:** the rules work whether the host has it on or off
+  (tested). `Options -MultiViews` is deliberately not set: Apache 2.4 refuses
+  it under a plain `AllowOverride Options`.
+- **Not reachable from `.htaccess`:** requests that Apache's core rejects
+  before reading `.htaccess` (malformed or encoded traversal → 400/404)
+  carry no `.htaccess` headers. They contain no site content.
+- **Host-level settings (`ServerTokens`, `TraceEnable`):** these belong to
+  Loopia.
+
+### Windows builds and link navigation
+
+- **Segment files:** on Windows, Next 16.2.7 (3 files per
+  build) misplace the page segment payloads (`__next.showcase/__PAGE__.txt`
+  instead of `__next.showcase.__PAGE__.txt`). `npm run build` runs
   `scripts/fix-export-segments.mjs` afterwards (`postbuild`), which moves
-  them to the names the browser requests. On Linux it does nothing.
-- **Link clicks reload the page:** in the local tests, clicks on `<Link>`
-  between pages fall back to a normal full page load instead of a
-  client-side transition. This is not caused by Apache or the headers. Pages
-  are complete static HTML, so nothing breaks; re-check with a Linux build in
-  Phase 10.
-
-### Also for Phase 10
-
-- **PHPMailer:** run `composer install --no-dev --classmap-authoritative` in
-  `php/` and include `php/vendor/` in the deployment, outside the web root
-  like the rest of `php/`.
-- **SMTP settings:** `SMTP_*` / `CONTACT_*` with the real Loopia mailbox.
-- **Proxy:** if Loopia puts a proxy in front of PHP, `REMOTE_ADDR` would be
-  the proxy's address and the rate limits (login and contact) would be shared
-  by all visitors. Check this at deployment.
-
-- **PHP:** execute only under `/api`. `/media` must never execute scripts.
-- **Private paths:** no access to `php/src`, `php/config`, `php/storage` or
-  any `.env*`.
-- **Caching:** long-lived cache headers for `/_next/static/*` (the file names
-  are content hashed); short or `no-cache` for HTML and `*.txt` payloads.
+  them. The package script runs it again (idempotent). On Linux it should
+  do nothing.
+- **Link navigation:** with the current Windows build, links between pages
+  are client-side transitions on both test servers (`/showcase.txt?_rsc=…`
+  is fetched; the page is not reloaded). The full page loads seen in Phase 9B
+  no longer occur.
+- **Linux build:** not compared yet, as no Linux environment was available
+  locally. At the first Linux/Loopia staging opportunity:
+  - run `npm ci && npm run build` on Linux
+  - check that `fix-export-segments` reports 0 files moved
+  - diff the `out/` file list against a Windows build
+  - click through the pages
 
 ## Admin frontend
 
@@ -1053,6 +1103,7 @@ shell (`out/admin.html`), with no admin data:
 php -l php/src/*.php
 php php/tests/smoke.php
 npm test        # admin and contact-form frontend logic (tests/*.test.ts, Node's built-in test runner)
+npm run package:loopia && npm run serve:package && npm run test:package   # production rules, in the package
 ```
 
 The smoke tests cover configuration validation, error hiding in production,

@@ -44,6 +44,10 @@ final class UploadConfig
         if ($mediaDir === null || $mediaDir === '') {
             // Default: the public web root folder that UPLOAD_URL_BASE maps to.
             $mediaDir = $appRoot . '/public' . $config->uploadUrlBase;
+        } elseif (!self::isAbsolutePath($mediaDir)) {
+            // Relative to the application root, e.g. "public_html/media" when
+            // the host's web root folder is not called "public".
+            $mediaDir = $appRoot . '/' . $mediaDir;
         }
 
         if (!is_dir($mediaDir)) {
@@ -70,6 +74,12 @@ final class UploadConfig
             throw new ConfigException('MEDIA_DIR does not exist or is not a directory.');
         }
         return new self($real, $maxUploadBytes, $maxFilesPerRequest, $mediaQuotaBytes);
+    }
+
+    /** "/srv/…", "C:\…", "C:/…" or "\\server\…" */
+    private static function isAbsolutePath(string $path): bool
+    {
+        return str_starts_with($path, '/') || str_starts_with($path, '\\') || preg_match('/^[A-Za-z]:[\\\\\/]/', $path) === 1;
     }
 
     private static function int(Config $config, string $key, int $default, int $min, int $max): int

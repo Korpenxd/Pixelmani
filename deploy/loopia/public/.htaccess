@@ -1,0 +1,209 @@
+# =============================================================================
+# PixelMani: PRODUCTION Apache rules for the PUBLIC web root (Loopia)
+# =============================================================================
+#
+# `npm run package:loopia` copies this file to public/.htaccess in the
+# deployment package. The web root holds only:
+#
+#   static export     index.html, showcase.html, admin.html, 404.html, _next/ …
+#   api/              PHP entry points, reached only as /api/<name> (no ".php")
+#   media/            photo files (WebP), served as files, never executed
+#
+# The PHP application (bootstrap.php, src/, vendor/, config/, storage/) lives
+# one directory ABOVE the web root and is never served.
+#
+# Other Apache configurations, which are not this file:
+#   php/dev/apache-vhost.local.conf     `npm run dev` (Laragon proxy to next dev)
+#   php/dev/apache-static.local.conf    `npm run serve:static` (out/ from the repo)
+#   php/dev/apache-package.local.conf   `npm run serve:package` (tests THIS file
+#                                       inside the assembled package)
+#
+# Needs mod_rewrite, mod_headers, mod_mime, mod_dir and AllowOverride with at
+# least FileInfo, Indexes, Options and AuthConfig. Nothing is wrapped in
+# <IfModule>: a missing module fails loudly (500) instead of silently dropping
+# a security rule.
+
+# ----------------------------------------------------------------- basics ----
+
+# (MultiViews is not touched: "AllowOverride Options" does not cover it on
+# Apache 2.4, and the rules below work with it on or off.)
+Options -Indexes -ExecCGI
+DirectoryIndex index.html
+# Next writes showcase.html next to a showcase/ directory, so /showcase must
+# not be redirected to /showcase/. The rules below map it to showcase.html.
+DirectorySlash Off
+# /showcase.html/extra and the like are not pages.
+AcceptPathInfo Off
+
+AddType image/webp .webp
+AddType font/woff2 .woff2
+AddType text/javascript .js
+AddType application/json .json
+AddCharset utf-8 .html .txt .xml .css .js .json
+
+# The site's static error page, with status 404. Under /api the answer is the
+# API's JSON error instead, so API clients never get an HTML page.
+ErrorDocument 404 /404.html
+<If "%{REQUEST_URI} =~ m#^/api(?:/|$)#">
+    ErrorDocument 404 /api/not-found.json
+</If>
+
+# ----------------------------------------------------------------- access ----
+# Checked before any rewriting. Denied requests get 403.
+
+# The web root is public on purpose. Stated explicitly so a deny-all in a
+# parent directory (the private application root) never applies here.
+Require all granted
+
+# Script files never run outside /api. Inside /api, ../api/.htaccess refuses
+# every script type except .php, and the rewrite rules below answer 404 to
+# direct *.php URLs, so PHP runs only through the clean /api/<name> URLs.
+<If "%{REQUEST_URI} =~ m#\.(?:php[0-9]*|phtml|pht|phar|phps|inc|cgi|fcgi|pl|py|rb|sh|bash|asp|aspx|jsp|exe|dll)(?:/|$)#i && %{REQUEST_URI} !~ m#^/api/#">
+    Require all denied
+</If>
+
+# Dotfiles and dot-directories (.env, .git, .htaccess …), except .well-known.
+<If "%{REQUEST_URI} =~ m#/\.(?!well-known/)#">
+    Require all denied
+</If>
+
+# Private or development files, should one ever be copied into the web root
+# by mistake. The real ones live outside it.
+<If "%{REQUEST_URI} =~ m#(?:^|/)(?:composer\.(?:json|lock|phar)|package(?:-lock)?\.json|tsconfig\.json|web\.config|sess_[^/]*|[^/]*\.(?:md|markdown|lock|sql|sqlite|db|log|ini|env|bak|backup|old|orig|save|swp|tmp|temp|dist|ya?ml|toml|conf|config|map|ts|tsx|zip|tar|gz|tgz|bz2|7z|rar|ps1|bat|cmd))$#i">
+    Require all denied
+</If>
+# The private application folders, should one ever end up in the web root.
+<If "%{REQUEST_URI} =~ m#^/(?:bootstrap\.php|src|vendor|config|storage|db|tests?|node_modules|migration-export)(?:/|$)#i">
+    Require all denied
+</If>
+
+# ---------------------------------------------------------------- routing ----
+
+RewriteEngine On
+RewriteBase /
+
+# Internal redirects (ErrorDocument pages, and requests already rewritten
+# below) are never rewritten again, so nothing here can loop.
+RewriteCond %{ENV:REDIRECT_STATUS} !^$
+RewriteRule ^ - [L]
+
+# Production host names: every redirect below goes straight to
+# https://pixelmani.se, so a request needs at most ONE hop. Any other host
+# (local tests) keeps its own origin and is never sent to production.
+RewriteCond %{HTTP_HOST} ^(?:www\.)?pixelmani\.se\.?(?::[0-9]+)?$ [NC]
+RewriteRule ^ - [E=PM_ORIGIN:https://pixelmani.se]
+
+# Rules that depend on the URL the browser asked for read it from
+# THE_REQUEST: with MultiViews on at the host, Apache may already have mapped
+# /api/health to api/health.php or /index to index.txt before these rules run.
+
+# /index and /index.html → /   (not /index.txt: the home page's navigation payload)
+RewriteCond %{THE_REQUEST} ^\S+\s+/index(?:\.html)?[?\s]
+RewriteRule ^ %{ENV:PM_ORIGIN}/ [R=301,L]
+
+# The error page is not a page of its own.
+RewriteRule ^(?:404|_not-found)(?:\.html)?$ - [R=404,L]
+
+# /showcase.html → /showcase (pages that exist only)
+RewriteCond %{REQUEST_FILENAME} -f
+RewriteRule ^(.+)\.html$ %{ENV:PM_ORIGIN}/$1 [R=301,L]
+
+# /showcase/ → /showcase (a trailing slash on a page)
+RewriteCond %{REQUEST_FILENAME} ^(.+?)/*$
+RewriteCond %1.html -f
+RewriteRule ^(.+?)/+$ %{ENV:PM_ORIGIN}/$1 [R=301,L]
+
+# http:// and www. → https://pixelmani.se, path (as sent) and query string kept.
+# HTTPS counts as on when Apache terminates TLS itself (%{HTTPS}) or when a
+# TLS-terminating proxy in front says so (X-Forwarded-Proto). A client
+# faking that header only avoids its own redirect; it gains nothing else.
+# Certificate challenges (/.well-known/acme-challenge/) stay reachable over
+# plain http, so the host can issue and renew the certificate.
+RewriteCond %{ENV:PM_ORIGIN} !^$
+RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+RewriteCond %{HTTP_HOST} !^pixelmani\.se$ [NC,OR]
+RewriteCond %{HTTPS}:%{HTTP:X-Forwarded-Proto} !^(?:on:.*|.*:https)$ [NC]
+RewriteCond %{THE_REQUEST} ^\S+\s+(/[^?\s]*)
+RewriteRule ^ https://pixelmani.se%1 [R=301,NE,L]
+# (Same for the rare absolute-form request line, "GET http://host/path".)
+RewriteCond %{ENV:PM_ORIGIN} !^$
+RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+RewriteCond %{HTTP_HOST} !^pixelmani\.se$ [NC,OR]
+RewriteCond %{HTTPS}:%{HTTP:X-Forwarded-Proto} !^(?:on:.*|.*:https)$ [NC]
+RewriteRule ^ https://pixelmani.se%{REQUEST_URI} [R=301,L]
+
+# API: /api/<endpoint> → api/<endpoint>.php, for the known entry points only.
+# Direct *.php URLs, unknown names and directories under /api get the JSON
+# 404. A new endpoint must be added to this list.
+RewriteCond %{THE_REQUEST} ^\S+\s+/api/[^?\s]*\.php[?\s/] [NC]
+RewriteRule ^ - [R=404,L]
+RewriteRule ^(api/(?:health|photos|categories|hero|hero-image|contact|admin/(?:login|logout|session|storage-usage|photos/(?:upload|update|delete|bulk-delete)|categories/(?:list|create|delete)|hero/upload)))(?:\.php)?$ $1.php [END]
+RewriteRule ^api(?:/|$) - [R=404,L]
+
+# Everything outside /api is read-only. (Apache's file handler would
+# otherwise answer POST to a static file with the file.) The API endpoints do
+# their own method checks.
+RewriteCond %{REQUEST_METHOD} !^(?:GET|HEAD|OPTIONS)$
+RewriteRule ^ - [R=405,L]
+
+# Pages: /showcase → showcase.html
+RewriteCond %{REQUEST_FILENAME}.html -f
+RewriteRule ^(.+)$ $1.html [END]
+
+# Any other directory (/_next/, /media/, /media/uploads/ …) is not a page.
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^. - [R=404,L]
+
+# ---------------------------------------------------------------- headers ----
+# "always" so error pages and redirects carry them too.
+
+# PHP sends nosniff itself; drop that copy so every response has exactly one.
+Header unset X-Content-Type-Options
+Header always set X-Content-Type-Options "nosniff"
+Header unset X-Powered-By
+Header always unset X-Powered-By
+Header always set Referrer-Policy "strict-origin-when-cross-origin"
+Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), browsing-topics=()"
+Header always set X-Frame-Options "DENY"
+
+# Same policy as the former next.config.ts. Only this origin: no third-party hosts.
+# 'unsafe-inline' scripts: the static export inlines its hydration data.
+# blob:/data: images: the admin prepares uploads in the browser.
+# upgrade-insecure-requests only over https; it would break plain-http tests.
+Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests" "expr=%{HTTPS} == 'on' || req_novary('X-Forwarded-Proto') == 'https'"
+Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" "expr=!(%{HTTPS} == 'on' || req_novary('X-Forwarded-Proto') == 'https')"
+
+# HSTS only over https and only for the production names.
+Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains" "expr=(%{HTTPS} == 'on' || req_novary('X-Forwarded-Proto') == 'https') && %{HTTP_HOST} =~ /^(?:www\.)?pixelmani\.se\.?(?::[0-9]+)?$/i"
+
+# ------------------------------------------------------------------ cache ----
+# Exactly one branch applies to each response.
+
+<If "%{REQUEST_URI} =~ m#^/api(?:/|$)#">
+    # The endpoints set their own Cache-Control (no-store for admin and
+    # contact, no-cache for public reads and the hero redirect). Only the
+    # static JSON 404 body needs one.
+    Header always set Cache-Control "no-store" "expr=%{REQUEST_URI} == '/api/not-found.json'"
+</If>
+<ElseIf "%{REQUEST_URI} =~ m#^/(?:_next/static|media)/#">
+    # Content-hashed build files and UUID-named photos never change in
+    # place. Not "always": a 404 here must not be cached for a year.
+    Header set Cache-Control "public, max-age=31536000, immutable"
+</ElseIf>
+<ElseIf "%{REQUEST_URI} =~ m#\.(?:ico|png|jpe?g|webp|gif|svg|woff2?)$#i">
+    # Icons and the sharing image at fixed names.
+    Header set Cache-Control "public, max-age=86400"
+</ElseIf>
+<Else>
+    # HTML, navigation payloads (*.txt), robots.txt, sitemap.xml, error
+    # pages and redirects: always revalidated, so a new build or hero shows
+    # up at once.
+    Header always set Cache-Control "no-cache"
+</Else>
+
+# ------------------------------------------------------------ compression ----
+# Optional; the host may already compress. JSON is left out on purpose
+# (admin responses carry the CSRF token).
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/css text/javascript application/javascript application/xml image/svg+xml
+</IfModule>

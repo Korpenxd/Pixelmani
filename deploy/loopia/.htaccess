@@ -1,0 +1,9 @@
+# PixelMani: PRIVATE application root (bootstrap.php, src/, vendor/, config/,
+# storage/). It belongs OUTSIDE the web root; only public/ is served.
+#
+# Safety net: if this directory is ever uploaded inside a web root by
+# mistake, bootstrap.php and the other files here are not served. src/,
+# config/, storage/ and vendor/ have their own deny-all as well. public/
+# grants access itself, so this never affects the real web root.
+Require all denied
+Options -Indexes

@@ -1,0 +1,12 @@
+# PixelMani: api/ in the PUBLIC web root (production).
+#
+# The entry points run only through the clean URLs in ../.htaccess
+# (/api/photos → api/photos.php); direct *.php URLs answer 404 there. Here:
+# no directory listings, and no script type other than .php is ever served
+# or run (.phtml, .phar, .php5 …). not-found.json is the body of the JSON 404.
+
+Options -Indexes -ExecCGI
+
+<FilesMatch "\.(?!(?:php|json)$)[^.]+$">
+    Require all denied
+</FilesMatch>

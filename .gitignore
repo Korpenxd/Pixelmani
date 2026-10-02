@@ -20,6 +20,9 @@
 # production
 /build
 
+# Loopia deployment package (npm run package:loopia; rebuilt from scratch every run)
+/dist/
+
 # misc
 .DS_Store
 *.pem

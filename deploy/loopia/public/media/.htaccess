@@ -1,0 +1,29 @@
+# PixelMani: media/ in the PUBLIC web root (production).
+#
+# Photo files written by the admin (uploads/, uploads/thumbs/, hero/). The
+# server-side upload validation already allows only re-encoded WebP with
+# generated names; this is defence in depth on top of it:
+#
+#   - only *.webp with a plain name (letters, digits, "-", "_"; no second
+#     dot, so nothing like x.php.webp) is served; everything else is 403
+#   - nothing here ever executes: no PHP, no CGI, no handlers
+#   - no directory listings
+#
+# Caching (one year, immutable: UUID names never change in place) and the
+# security headers come from ../.htaccess.
+
+Options -Indexes -ExecCGI
+
+Require all denied
+<FilesMatch "^[A-Za-z0-9][A-Za-z0-9_-]*\.webp$">
+    Require all granted
+    ForceType image/webp
+</FilesMatch>
+
+RemoveHandler .php .phtml .pht .phar .phps .php3 .php4 .php5 .php7 .php8 .inc .cgi .fcgi .pl .py .sh
+RemoveType .php .phtml .pht .phar .phps .php3 .php4 .php5 .php7 .php8 .inc
+
+# When PHP runs as an Apache module, switch it off here entirely.
+<IfModule php_module>
+    php_flag engine off
+</IfModule>

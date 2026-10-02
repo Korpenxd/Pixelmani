@@ -8,7 +8,10 @@
     "postbuild": "node scripts/fix-export-segments.mjs",
     "lint": "eslint",
     "test": "node --import ./tests/register.mjs --test tests/*.test.ts",
-    "serve:static": "node php/dev/serve-static.mjs"
+    "serve:static": "node php/dev/serve-static.mjs",
+    "package:loopia": "node scripts/package-loopia.mjs",
+    "serve:package": "node php/dev/serve-static.mjs start --package",
+    "test:package": "node php/dev/test-package-http.mjs"
   },
   "dependencies": {
     "next": "16.2.7",

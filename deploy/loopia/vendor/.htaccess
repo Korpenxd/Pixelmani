@@ -1,0 +1,2 @@
+# Composer dependencies (PHPMailer). Never served; see ../.htaccess.
+Require all denied

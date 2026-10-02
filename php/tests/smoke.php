@@ -648,6 +648,27 @@ removeTree($storage);
 
 // ── Photo uploads ───────────────────────────────────────────────────────────
 
+echo "\nUpload configuration: MEDIA_DIR\n";
+
+$fakeAppRoot = tempDir();
+mkdir($fakeAppRoot . '/public_html/media', 0777, true);
+$mediaDirFor = static function (?string $value) use ($fakeAppRoot): string {
+    try {
+        return UploadConfig::fromConfig(Config::fromArray(validConfig(['MEDIA_DIR' => $value])), $fakeAppRoot)->mediaDir;
+    } catch (ConfigException $e) {
+        return 'error: ' . $e->getMessage();
+    }
+};
+$expected = realpath($fakeAppRoot . '/public_html/media');
+check('relative MEDIA_DIR resolves against the application root (public_html/media)', $mediaDirFor('public_html/media') === $expected, $mediaDirFor('public_html/media'));
+check('… also written with a leading ./', $mediaDirFor('./public_html/media') === $expected);
+check('absolute MEDIA_DIR is used as given', $mediaDirFor($fakeAppRoot . '/public_html/media') === $expected);
+check('default (public/media) missing → configuration error, not a guess', str_starts_with($mediaDirFor(null), 'error: MEDIA_DIR does not exist'));
+check('relative MEDIA_DIR that does not exist → configuration error', str_starts_with($mediaDirFor('public/media'), 'error: MEDIA_DIR does not exist'));
+mkdir($fakeAppRoot . '/public/media', 0777, true);
+check('default MEDIA_DIR is <application root>/public/media', $mediaDirFor(null) === realpath($fakeAppRoot . '/public/media'));
+removeTree($fakeAppRoot);
+
 echo "\nPhoto upload: request parsing\n";
 
 $fixtureDir = tempDir();
