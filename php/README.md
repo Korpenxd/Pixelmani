@@ -1048,7 +1048,7 @@ pixelmani-loopia-precutover/   PRIVATE root → the folder above the web root
 
 ### Windows builds and link navigation
 
-- **Segment files:** on Windows, Next 16.2.7 (3 files per
+- **Segment files:** on Windows, Next 16.2.7 and still 16.3.8 (3 files per
   build) misplace the page segment payloads (`__next.showcase/__PAGE__.txt`
   instead of `__next.showcase.__PAGE__.txt`). `npm run build` runs
   `scripts/fix-export-segments.mjs` afterwards (`postbuild`), which moves
