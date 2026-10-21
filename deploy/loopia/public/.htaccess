@@ -1,9 +1,13 @@
 # =============================================================================
-# PixelMani: PRODUCTION Apache rules for the PUBLIC web root (Loopia)
+# PixelMani: Apache rules for the web root (production and staging)
 # =============================================================================
 #
-# `npm run package:loopia` copies this file to public/.htaccess in the
-# deployment package. The web root holds only:
+# Shared by both deployment packages:
+#   `npm run package:loopia`      → public/.htaccess, unchanged (public site)
+#   `npm run package:websupport`  → web/.htaccess, with the access gate below
+#                                   replaced by the staging password protection
+#
+# The web root holds only:
 #
 #   static export     index.html, showcase.html, admin.html, 404.html, _next/ …
 #   api/              PHP entry points, reached only as /api/<name> (no ".php")
@@ -51,9 +55,19 @@ ErrorDocument 404 /404.html
 # ----------------------------------------------------------------- access ----
 # Checked before any rewriting. Denied requests get 403.
 
-# The web root is public on purpose. Stated explicitly so a deny-all in a
-# parent directory (the private application root) never applies here.
+# The ONE access gate of the whole web root. Production: public on purpose,
+# stated explicitly so a deny-all in a parent directory (the private
+# application root) never applies here. `npm run package:websupport` replaces
+# this block with the staging password protection (HTTP Basic Auth).
+#
+# Nothing else in this file or in api/ and media/ may grant access: in Apache
+# 2.4 a nested section with its own Require REPLACES the gate instead of
+# adding to it, so a second grant would bypass the staging password. The
+# packaging script refuses any authorization line outside this block other
+# than "Require all denied".
+# @pixelmani:access-gate begin
 Require all granted
+# @pixelmani:access-gate end
 
 # Script files never run outside /api. Inside /api, ../api/.htaccess refuses
 # every script type except .php, and the rewrite rules below answer 404 to

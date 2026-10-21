@@ -102,9 +102,31 @@ npm run test:package     # HTTP-test av omdirigeringar, headers, 404, API och sk
   - säkerhetsheaders (tidigare satta av Next.js)
   - cache
   - PHP bara under `/api`
+- **Ombyggnad lokalt sker bara offline:** stoppa testservern (`node php/dev/serve-static.mjs stop`) innan paketet byggs om.
+  - Paketeraren och testservern tar samma exklusiva ägarskap av paketet, så det ena vägrar medan det andra kör.
+  - Ligger det bilder i paketets `media/` som saknas i `php/public/media/` (t.ex. uppladdade via den lokalt serverade adminen) stoppar bygget och listar dem. Ingenting raderas.
+  - Se "Package lifecycle" i [`php/README.md`](php/README.md#package-lifecycle-local-rebuilds-and-what-is-persistent).
+- **Kod och bilder driftsätts var för sig:** koden byts ut vid varje driftsättning. `media/` på servern (och bildernas databasrader) ersätts eller raderas aldrig av en koddriftsättning.
 - **Uppladdning, konfiguration och kontroller hos Loopia:** se [`deploy/loopia/DEPLOY.md`](deploy/loopia/DEPLOY.md), som också följer med i paketet.
 - **Kontaktformuläret:** kräver ett riktigt e-postkonto hos Loopia, SMTP via `mailcluster.loopia.se`, port 587, STARTTLS.
-- **Detaljer:** se "Production" i [`php/README.md`](php/README.md#production-apache-rules-and-the-loopia-package).
+- **Detaljer:** se "Production" i [`php/README.md`](php/README.md#production-apache-rules-and-the-deployment-packages).
+
+### Staging hos Websupport (staging.pixelmani.se)
+
+Webbhotellet är Websupport. Staging-sajten är lösenordsskyddad (HTTP Basic Auth från Websupports panel) och indexeras aldrig.
+
+```bash
+npm run test:websupport     # bygg, servera och testa staging-paketet lokalt bakom ett tillfälligt lösenord
+npm run package:websupport  # staging-paketet i dist/websupport/ (kräver ägarens kopia av Websupports web/.htaccess)
+npm run snapshot:staging -- --target-db=<namn>  # engångs-SQL med lokala testdata, bara för den namngivna, tomma staging-databasen
+```
+
+- **Lösenordsskyddet:** ägarens kopia av Websupports `web/.htaccess` sparas som `deploy/websupport/staging-auth.local.htaccess` (gitignorerad, aldrig i git).
+  - Paketet byggs inte utan den.
+  - Bara de fyra Basic Auth-raderna godtas.
+  - Inga andra regler i webbroten kan släppa förbi lösenordet.
+  - `web/.htaccess` byts aldrig för hand: paketets fil aktiveras med ett genererat verktyg som byter filen atomärt (se steg 7 i DEPLOY.md).
+- **Steg för steg (uppladdning, konfiguration, kontroller, återställning):** [`deploy/websupport/DEPLOY.md`](deploy/websupport/DEPLOY.md).
 
 ## Produktionsdomän
 
@@ -153,6 +175,11 @@ npm run dev            # utveckling (bakom Laragons Apache, se ovan)
 npm run build          # statisk export till out/
 npm run serve:static   # testa out/ lokalt med Apache + PHP, utan Node
 npm run package:loopia # driftpaket för Loopia (dist/loopia/)
+npm run package:websupport # staging-paket för Websupport (dist/websupport/)
+npm run test:websupport # testa staging-paketet lokalt bakom Basic Auth
+npm run snapshot:staging -- --target-db=<namn> # lokala testdata som SQL för staging
+npm run test:package-guards # paketeringens skydd (ägarskap, uppladdningar, avbrutna byten, serverkonfiguration)
+npm run test:snapshot  # SQL-ögonblicksbildens skydd mot fel databas
 npm run serve:package  # testa driftpaketet lokalt
 npm run test:package   # HTTP-test mot driftpaketet
 npm test               # enhetstester för adminlogiken

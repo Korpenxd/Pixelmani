@@ -64,14 +64,20 @@ php/
   tests/upload-fixtures.php   generates local upload test images (uses GD; tests only)
   dev/apache-vhost.local.conf     Laragon vhost (local development only)
   dev/apache-static.local.conf    `npm run serve:static`: out/ + PHP, no Node (local test)
-  dev/apache-package.local.conf   `npm run serve:package`: the assembled deployment package (local test)
-  dev/serve-static.mjs            starts/stops those two test servers
-  dev/test-package-http.mjs       `npm run test:package`: HTTP matrix against the package
+  dev/apache-package.local.conf   `npm run serve:package` / `serve:websupport`: an assembled deployment package (local test)
+  dev/serve-static.mjs            starts/stops those test servers
+  dev/test-package-http.mjs       `npm run test:package`: HTTP matrix against a package
+  dev/test-websupport.mjs         `npm run test:websupport`: the Websupport staging package behind a throwaway Basic Auth
 
-deploy/loopia/           production overlay copied into the package by scripts/package-loopia.mjs:
-  public/.htaccess       the production Apache rules (+ public/api/, public/media/)
-  config/config.example.php   production config template
-  DEPLOY.md              upload mapping, config, Loopia checks, cutover order
+deploy/loopia/           overlay copied into the packages by scripts/package-deploy.mjs:
+  public/.htaccess       the web-root Apache rules, shared by both targets (+ public/api/, public/media/)
+  config/config.example.php   Loopia production config template
+  DEPLOY.md              Loopia: upload mapping, config, checks, cutover order
+deploy/websupport/       Websupport staging (staging.pixelmani.se):
+  config/config.staging.example.php   staging config template
+  capability-probe.php   one-off host check (PHP 8.4, open_basedir, writing, WebP)
+  DEPLOY.md              the exact staging deployment procedure
+  staging-auth.local.htaccess   the owner's backup of Websupport's web/.htaccess (gitignored, never in git)
 ```
 
 `config/`, `src/`, `storage/` and `tests/` each contain a deny-all `.htaccess`
@@ -947,7 +953,7 @@ logs go to the system temp folder.
 - **Environment overrides:** `PIXELMANI_HTTPD`, `PIXELMANI_MOD_PHP_CONF` and
   `PIXELMANI_STATIC_PORT`.
 
-## Production: Apache rules and the Loopia package
+## Production: Apache rules and the deployment packages
 
 Next.js does not run in production, so Apache does everything `next.config.ts`
 used to do at runtime: security headers, the canonical host, clean URLs. The
@@ -957,7 +963,10 @@ rules and everything else the server needs come from one command:
 npm run package:loopia        # build + package + ZIP (PHP/MySQL must be running for the build)
 npm run serve:package         # serve the assembled package locally (Apache + PHP, no Node)
 npm run test:package          # HTTP matrix against it
-node php/dev/serve-static.mjs stop
+node php/dev/serve-static.mjs stop   # required before the next rebuild (the server owns the package)
+
+npm run package:websupport    # Websupport STAGING package (needs the owner's auth backup; see below)
+npm run test:websupport       # build + serve + test it locally behind a throwaway Basic Auth
 ```
 
 ### Apache configurations and what each is for
@@ -966,13 +975,14 @@ node php/dev/serve-static.mjs stop
 | --- | --- | --- |
 | `php/dev/apache-vhost.local.conf` | `npm run dev` (Laragon) | development: `/api` and `/media` from PHP, everything else proxied to `next dev` |
 | `php/dev/apache-static.local.conf` | `npm run serve:static` | `out/` from the repository, no Node |
-| `php/dev/apache-package.local.conf` | `npm run serve:package` | the assembled package with its **own production `.htaccess` files** |
-| `deploy/loopia/public/.htaccess` (+ `api/`, `media/`) | Loopia | the **production** rules, copied into the package |
+| `php/dev/apache-package.local.conf` | `npm run serve:package`, `serve:websupport` | an assembled package with its **own `.htaccess` files** (Loopia: `public/`; Websupport: `web/`, Basic Auth modules loaded) |
+| `deploy/loopia/public/.htaccess` (+ `api/`, `media/`) | both packages | the web-root rules, copied into the package; Websupport staging swaps the access gate for Basic Auth |
 
 ### The package
 
-`scripts/package-loopia.mjs` builds `dist/loopia/pixelmani-loopia-precutover/`
-(gitignored, recreated from scratch every run) and a ZIP of it:
+`scripts/package-deploy.mjs --target=loopia` (`npm run package:loopia`) builds `dist/loopia/pixelmani-loopia-precutover/`
+(gitignored, rebuilt offline every run; see
+[Package lifecycle](#package-lifecycle-local-rebuilds-and-what-is-persistent)) and a ZIP of it:
 
 ```
 pixelmani-loopia-precutover/   PRIVATE root → the folder above the web root
@@ -1005,9 +1015,16 @@ pixelmani-loopia-precutover/   PRIVATE root → the folder above the web root
     them
   - a short allowlist names the exact harmless snippets, such as PHPMailer's
     `localhost` default and doc comments
-- **Media:** a snapshot of `php/public/media` for testing; `--no-media` gives
-  empty directories. Only managed WebP names are accepted. The final media
-  copy happens at cutover.
+- **Media:** a snapshot of `php/public/media` (the only photo source) for
+  testing. Only managed WebP names are accepted. The final media copy
+  happens at cutover, separately from code deployments.
+- **`--no-media`:** gives empty media directories.
+  - Allowed only for a first package, or to replace one whose media folder
+    is empty. It never replaces a package that holds any media file
+    (refused before the build, no override).
+  - A package without photos is not ready to serve a populated database.
+    Photos and rows must be in sync and verified before a site using it
+    goes live.
 - **Manifest:** `MANIFEST.json` records the source commit, toolchain, the
   Composer lock hash and packages, file counts and key checksums.
   `SHA256SUMS` covers every file.
@@ -1030,6 +1047,7 @@ pixelmani-loopia-precutover/   PRIVATE root → the folder above the web root
 | 404 | Unknown pages → `404.html` with status 404. `/404` and `/404.html` are not pages. Under `/api`: the JSON `{"ok":false,"error":{"code":"not_found",…}}`. |
 | API | Only the listed entry points, as `/api/<name>`. Direct `*.php`, unknown names and directories → JSON 404. Methods are left to the endpoints (405 JSON). |
 | Methods outside `/api` | GET, HEAD, OPTIONS; anything else 405. Apache would otherwise answer POST to a static file with the file. |
+| Access gate | Exactly one block grants access (between the `@pixelmani:access-gate` markers): `Require all granted` in production. Every other authorization line in the web root, `api/` and `media/` is `Require all denied`; the packager refuses anything else. In Apache 2.4 a nested `Require` *replaces* the parent's, so a second grant (e.g. the former `Require all granted` for photos in `media/.htaccess`) would bypass a password. |
 | PHP execution | Script extensions (`.php`, `.phtml`, `.phar`, `.php5` …) are denied everywhere except `/api`. `api/.htaccess` denies every script type but `.php`. `media/.htaccess` serves only `*.webp` with plain names (no `x.php.webp`) and removes handlers. |
 | Private paths | Denied **inside** the web root too, as defence in depth (the real files are outside it): dotfiles except `.well-known`, dumps, logs, archives, source maps, Composer/npm manifests, `sess_*`, and folders named like the private ones (`src/`, `vendor/`, `config/`, `storage/` …). |
 | Headers | On every response: CSP, X-Content-Type-Options (exactly once; PHP's copy is replaced), Referrer-Policy, Permissions-Policy, X-Frame-Options. `upgrade-insecure-requests` and HSTS only over https; HSTS only for the production names. |
@@ -1044,7 +1062,237 @@ pixelmani-loopia-precutover/   PRIVATE root → the folder above the web root
   before reading `.htaccess` (malformed or encoded traversal → 400/404)
   carry no `.htaccess` headers. They contain no site content.
 - **Host-level settings (`ServerTokens`, `TraceEnable`):** these belong to
-  Loopia.
+  the host.
+
+### Websupport staging (staging.pixelmani.se)
+
+`npm run package:websupport` uses the same script, rules and checks, with
+these differences (procedure: `deploy/websupport/DEPLOY.md`):
+
+- **Layout:** the web root is `web/` (Websupport's document root). The
+  private root holds `bootstrap.php src/ vendor/ config/ storage/` next to
+  `web/` and the host's `logs/` and `sub/`.
+  - No deny-all `.htaccess` is shipped there: it would also affect `logs/`
+    and `sub/`.
+  - `MEDIA_DIR=web/media` in the config.
+- **Build:** a staging build through the site's preview contract in
+  `lib/site.ts` (`NEXT_PUBLIC_VERCEL_ENV=preview`,
+  `NEXT_PUBLIC_VERCEL_URL=staging.pixelmani.se`):
+  - canonical, Open Graph, JSON-LD and the sitemap use
+    `https://staging.pixelmani.se`
+  - `robots.txt` disallows everything, and every page has
+    `noindex, nofollow`
+  - the packager checks this, and refuses a production build for staging
+    and vice versa (marker `out/.pixelmani-build.json`, never shipped)
+- **Password protection:** the owner's backup of Websupport's `web/.htaccess`
+  goes to `deploy/websupport/staging-auth.local.htaccess` (gitignored) or
+  `--auth-file`.
+  - **Accepted:** only `AuthType Basic`, `AuthName "…"`,
+    `AuthUserFile <absolute path, not under web/>` and
+    `Require valid-user`. Anything else fails the run.
+  - **Kept verbatim:** the lines become the access gate at the very top of
+    the new web-root `.htaccess`, `Require valid-user` first. Apache
+    ignores order, but a file cut off anywhere then asks for the password or
+    fails with a 500; it is never public.
+  - **Plus:** `X-Robots-Tag: noindex`.
+  - **No auth file:** no package (fail closed).
+  - **Leak scan:** only that exact `AuthUserFile` line is exempt.
+- **Gate installation without a gap:** the staging package has NO
+  `web/.htaccess`, so a bulk upload of `web/` can never overwrite the live
+  gate in place.
+  - The file is `install/web.htaccess`, uploaded as `web/.htaccess.new`.
+  - `install/pm-gate-swap-<token>.php` (rendered from
+    `deploy/websupport/gate-swap.template.php`) activates it with ONE
+    `rename()` over the active file. On Linux that is atomic `rename(2)`.
+  - It refuses unless the request is authenticated (`REMOTE_USER`), both
+    files carry the same `AuthUserFile`, the new file matches its SHA-256,
+    the server is POSIX and both files are on one filesystem.
+  - A preflight first proves Apache accepts the new file (in a test folder).
+  - It keeps a copy of the old file and deletes itself.
+  - Rolling the site back never touches `.htaccess`.
+- **Canonical redirects:** they apply only to `pixelmani.se` /
+  `www.pixelmani.se`, so staging is never sent to production, and HSTS is
+  not sent for it.
+- **Offline rebuilds, one owner (both targets, fail closed):** see
+  [Package lifecycle](#package-lifecycle-local-rebuilds-and-what-is-persistent)
+  below.
+- **Server configuration audit:** every `.htaccess`, `.user.ini`,
+  `.htpasswd` and similar file anywhere in the package is found
+  recursively. It must be on a short allowlist and byte-identical to its
+  reviewed source; anything else fails the run and is not removed.
+- **Staging data:** `npm run snapshot:staging -- --target-db=<name>` writes
+  a disposable SQL snapshot of the LOCAL database for ONE named staging
+  database. It refuses rows whose photo files are missing
+  (`--exclude-missing` leaves them out).
+  - **The guard does not rely on errors stopping the importer:** it checks
+    once that the selected database is exactly the named one and all three
+    tables are empty. Every `INSERT … SELECT … WHERE guard` is qualified
+    with the database name.
+  - **One transaction,** committed only if every row arrived, then a final
+    `ROLLBACK`, and a closing result line (`IMPORT COMMITTED` /
+    `NOTHING IMPORTED`).
+  - **`--reset`:** writes an equally guarded reset file (separate approval
+    and a backup first).
+- **Remote checks:**
+  - `deploy/websupport/capability-probe.php`: a one-off, self-deleting
+    probe for PHP 8.4, `open_basedir`, writing, `flock`, WebP, limits,
+    `REMOTE_ADDR`, and what the swap tool needs: the authenticated user
+    visible to PHP, POSIX, and `rename()` over an existing file in `web/`.
+  - `scripts/verify-staging.mjs`: a read-only check of the deployed site:
+    401 + Basic challenge on every route without or with wrong credentials,
+    then the site itself, optionally the admin.
+
+`npm run test:websupport` does all of this locally against a throwaway
+`.htpasswd`:
+
+- **Validator:** it refuses bad auth files.
+- **Install:** it starts from the host's state (Websupport's four lines as
+  `web/.htaccess`) and installs with the swap tool: check, preflight, then
+  install.
+  - Throughout, parallel loops of unauthenticated requests must never get
+    anything but 401/403.
+  - Tampered files, a different password file and a password-less call are
+    refused.
+  - Application rollback, with the gate kept, is likewise never exposed.
+  - **Control:** the former rename-away/rename-in hand procedure is shown to
+    expose content.
+- **Negative controls:** it shows that the former media rule and a naive
+  `Require all granted` + `Require valid-user` merge really serve content
+  without a password.
+- **Truncation:** an `.htaccess` cut off after any line in or near the gate
+  fails closed.
+- **Two runs:**
+  - local mode over http: the 172-test matrix with credentials, the
+    verifier, admin login and contact to Mailpit
+  - the exact staging config over TLS (`APP_ENV=staging`, https
+    `SITE_URL`, no SMTP)
+
+Two more local regression tests, on disposable fixtures:
+
+- **`npm run test:package-guards`:** a temporary `dist/`, a copy of `out/`
+  and a copy of `php/public/media` as the photo source. Test servers only
+  start and stop, so nothing writes to the local database. It covers:
+  - **Ownership:** a running server refuses packaging and a running
+    packager refuses a server. A second packager or server is refused, also
+    through a junction. 12 processes racing at the same instant give exactly
+    one owner.
+  - **Stale and ambiguous owners:** they fail closed. Recovery needs a
+    confirmed id. Two concurrent recoveries, or a late one, never remove a
+    newer owner. `stop` releases the owner after a server was killed.
+  - **Photos the source lacks:** uploads, thumbnails, heroes, a changed photo
+    or a stray file are refused before the build. The same holds with
+    missing or forged `SHA256SUMS`, while a missing or foreign `MANIFEST.json`
+    is refused. Copying an upload into the source keeps it.
+  - **`--no-media`:**
+    - a first build and replacing a media-empty package work
+    - replacing a package with photos is refused before the build, with the
+      package and every photo byte intact
+    - a photo appearing before or after the move aside is caught
+  - **`--recover`:** it keeps the old package when the active one lacks one
+    of its photos or holds different bytes.
+  - **Failures and interruptions:** a failed build, a failed rename, a failed
+    rollback, and a kill after the move or after activation are each
+    recovered with `--recover`, and nothing is lost. A file that appears in
+    the moved-aside package is caught.
+  - **Smuggled server files:** `.htaccess`, `.user.ini` and `.htpasswd` in
+    the export are refused.
+- **`npm run test:snapshot`:** throwaway local databases, every import with
+  `mysql --force`. It covers an empty target, populated, partial, the wrong
+  database, no database, an interrupted import, a row failing mid-import,
+  and the guarded reset. `pixelmani_local` is checked unchanged. If it
+  refuses, it says exactly which of its throwaway databases were dropped
+  again or left in place.
+
+### Package lifecycle: local rebuilds and what is persistent
+
+A deployment has two kinds of content, handled separately:
+
+| | What | Lifecycle |
+| --- | --- | --- |
+| **A: code** | everything the packager generates: `bootstrap.php`, `src/`, `vendor/`, the static pages, `api/`, the `.htaccess` files, `MANIFEST.json`, `SHA256SUMS` | disposable; rebuilt from the repository at any time |
+| **B: data** | photo files in `<web>/media/` (`uploads/`, `uploads/thumbs/`, `hero/`) and the database rows that point at them | persistent; never replaced or deleted by a code deployment |
+
+**Remote (Websupport, Loopia):** code deployments replace A only.
+- `web/media` (`public/media`) on the server is never blindly replaced or
+  deleted: no "upload the whole folder", no sync with `--delete`.
+- Importing or backfilling photos and their database rows is a separate,
+  explicit step (`DEPLOY.md`), never a side effect of a code deployment.
+
+**Locally, rebuilding is strictly offline.** One rule:
+
+> Stop the test server before rebuilding a package. If the packager refuses
+> because of photos, preserve what it lists, then rebuild.
+
+What enforces it:
+
+- **One owner per package:** `scripts/package-owner.mjs`.
+  - The packager and the test server (`serve:package`, `serve:websupport`)
+    take the same exclusive owner file, `dist/<target>/.<package>.owner`,
+    before they touch or serve the package, and hold it to the end (the
+    server until `stop`).
+  - The file is created atomically and complete: a temporary file is
+    hard-linked into place, which fails if it exists.
+  - So packaging is refused while a server runs, a server refuses to start
+    while packaging runs, and a second packager or server is refused.
+  - The package path is resolved through junctions and symlinks, so another
+    spelling of the path is the same owner.
+- **Only the admin of a locally served package can write uploads into
+  it:** its `MEDIA_DIR` is the package's own media folder. Serving requires
+  ownership, so no upload can race a rebuild.
+- **Stale or ambiguous owners fail closed.** A crashed run, a server killed
+  without `stop`, or an unreadable record blocks both packaging and serving.
+  Nothing takes it over automatically. To recover:
+  1. Make sure nothing runs: `node php/dev/serve-static.mjs status`, and no
+     `node … package-deploy.mjs` in Task Manager.
+  2. For a test server, `node php/dev/serve-static.mjs stop` releases its
+     ownership once Apache is gone. Otherwise run
+     `node scripts/package-owner.mjs recover <package dir>`. It shows the
+     record and its id and changes nothing.
+  3. `node scripts/package-owner.mjs recover <package dir> --confirm=<id>`
+     removes exactly that record. It takes its own recovery lock, re-checks
+     that the record is unchanged and that its processes are gone, and never
+     touches the package.
+
+  Two recoveries can therefore never remove each other's, or a newer,
+  ownership.
+- **Nothing that B needs is lost.** An existing package is replaced only if
+  every file in its media folder is also in `php/public/media/` at the same
+  path, byte for byte. The new package takes its photos from there, so
+  whatever the local database can point at stays available.
+  - `SHA256SUMS` is not consulted for this: missing or forged metadata can
+    neither hide an upload nor make one deletable.
+  - A missing or foreign `MANIFEST.json` is refused (not recognisable as the
+    package).
+  - Otherwise the run stops before the build, changes nothing and lists the
+    files. Keep a file by copying it to `php/public/media/<same path>`. Only
+    if you are sure the database no longer refers to it, move it out of the
+    package yourself.
+  - **`--no-media`** (a package without photos) may replace an existing
+    package only if that one holds no media file at all. Otherwise it is
+    refused before the build, with no override.
+  - There is no discard override, and the packager never edits database
+    rows.
+- **Replacement keeps a fallback until the new package is in place:**
+  1. Assemble in `.<package>.partial/`.
+  2. Move the old package to `.<package>.previous/` and check it again
+     there. If the new package lacks any of its media files byte for byte,
+     with or without `--no-media`, it goes back.
+  3. Move the new package into place.
+  4. Only then delete the old one.
+
+  A failed step puts the old package back.
+- **Interrupted replacements need an explicit step.** If a run dies between
+  these steps, the next run refuses. With ownership held, `--recover`
+  (e.g. `npm run package:loopia -- --recover`) then does one of two things:
+  - **No package in place:** it moves the old one back.
+  - **New package in place:** it deletes the old one only if all of these
+    hold:
+    - the new one matches its `SHA256SUMS`
+    - the new one holds every media file of the old one, byte for byte
+    - the old one holds no photo the source lacks
+
+    Otherwise both are kept and it says why. To go back to the old one:
+    move the new one out of `dist/` yourself, then rerun `--recover`.
 
 ### Windows builds and link navigation
 
@@ -1104,6 +1352,7 @@ php -l php/src/*.php
 php php/tests/smoke.php
 npm test        # admin and contact-form frontend logic (tests/*.test.ts, Node's built-in test runner)
 npm run package:loopia && npm run serve:package && npm run test:package   # production rules, in the package
+npm run test:websupport   # Websupport staging package behind a throwaway Basic Auth
 ```
 
 The smoke tests cover configuration validation, error hiding in production,

@@ -1,4 +1,4 @@
-# PixelMani: media/ in the PUBLIC web root (production).
+# PixelMani: media/ in the web root (production and staging).
 #
 # Photo files written by the admin (uploads/, uploads/thumbs/, hero/). The
 # server-side upload validation already allows only re-encoded WebP with
@@ -9,14 +9,21 @@
 #   - nothing here ever executes: no PHP, no CGI, no handlers
 #   - no directory listings
 #
+# This file only DENIES. Access to the allowed photos comes from the web
+# root's single access gate (public in production, password on staging). A
+# "Require all granted" here would replace that gate for photos and bypass
+# the staging password, so the packaging script refuses one.
+#
 # Caching (one year, immutable: UUID names never change in place) and the
 # security headers come from ../.htaccess.
 
 Options -Indexes -ExecCGI
 
-Require all denied
-<FilesMatch "^[A-Za-z0-9][A-Za-z0-9_-]*\.webp$">
-    Require all granted
+# Everything that is not a plainly named .webp file.
+<FilesMatch "^(?![A-Za-z0-9][A-Za-z0-9_-]*\.webp$)">
+    Require all denied
+</FilesMatch>
+<FilesMatch "\.webp$">
     ForceType image/webp
 </FilesMatch>
 

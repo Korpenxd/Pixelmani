@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * LOCAL TESTING ONLY: HTTP matrix against the ASSEMBLED deployment package,
+ * LOCAL TESTING ONLY: HTTP matrix against an ASSEMBLED deployment package
+ * (Loopia, or with --websupport the Websupport staging package behind Basic Auth),
  * as served by `npm run serve:package` (production .htaccess files, PHP, MySQL).
  *
  *   npm run package:loopia
@@ -26,10 +27,24 @@ import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const PKG = path.resolve(process.argv[2] ?? path.join(root, 'dist', 'loopia', 'pixelmani-loopia-precutover'))
-const PUB = path.join(PKG, 'public')
-const PORT = Number(process.env.PIXELMANI_PACKAGE_PORT ?? 8091)
-const TLS_PORT = Number(process.env.PIXELMANI_PACKAGE_TLS_PORT ?? 8444)
+// --websupport: the Websupport staging package (web/ as the web root, port
+// 8092/8445). Every request then carries the local Basic Auth fixture from
+// PIXELMANI_TEST_BASIC_AUTH=user:password, so the same expectations prove the
+// site behaves identically behind the staging password.
+const websupport = process.argv.includes('--websupport')
+const pkgArg = process.argv.slice(2).find((a) => !a.startsWith('--'))
+const PKG = path.resolve(pkgArg ?? (websupport
+  ? path.join(root, 'dist', 'websupport-localtest', 'pixelmani-websupport-localtest')
+  : path.join(root, 'dist', 'loopia', 'pixelmani-loopia-precutover')))
+const PUB = path.join(PKG, websupport ? 'web' : 'public')
+const PORT = Number(websupport ? process.env.PIXELMANI_WEBSUPPORT_PORT ?? 8092 : process.env.PIXELMANI_PACKAGE_PORT ?? 8091)
+const TLS_PORT = Number(websupport ? process.env.PIXELMANI_WEBSUPPORT_TLS_PORT ?? 8445 : process.env.PIXELMANI_PACKAGE_TLS_PORT ?? 8444)
+const BASIC = process.env.PIXELMANI_TEST_BASIC_AUTH
+if (websupport && !BASIC) {
+  console.error('test-package-http: --websupport needs PIXELMANI_TEST_BASIC_AUTH=user:password (the local fixture; npm run test:websupport sets it).')
+  process.exit(1)
+}
+const AUTH = BASIC ? { Authorization: `Basic ${Buffer.from(BASIC).toString('base64')}` } : {}
 const LOCAL = `pixelmani.test:${PORT}`
 if (!existsSync(path.join(PUB, '.htaccess'))) {
   console.error(`test-package-http: no package at ${PKG}. Run npm run package:loopia and npm run serve:package first.`)
@@ -48,7 +63,7 @@ function request({ scheme = 'http', host = LOCAL, path: p, method = 'GET', heade
   const lib = scheme === 'https' ? https : http
   return new Promise((resolve, reject) => {
     const req = lib.request({
-      host: '127.0.0.1', port, path: p, method, headers: { Host: host, ...headers },
+      host: '127.0.0.1', port, path: p, method, headers: { Host: host, ...AUTH, ...headers },
       servername: host.split(':')[0], rejectUnauthorized: false, agent: false,
     }, (res) => {
       const chunks = []

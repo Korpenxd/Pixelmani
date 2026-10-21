@@ -9,9 +9,15 @@
     "lint": "eslint",
     "test": "node --import ./tests/register.mjs --test tests/*.test.ts",
     "serve:static": "node php/dev/serve-static.mjs",
-    "package:loopia": "node scripts/package-loopia.mjs",
+    "package:loopia": "node scripts/package-deploy.mjs --target=loopia",
+    "package:websupport": "node scripts/package-deploy.mjs --target=websupport-staging",
     "serve:package": "node php/dev/serve-static.mjs start --package",
-    "test:package": "node php/dev/test-package-http.mjs"
+    "test:package": "node php/dev/test-package-http.mjs",
+    "serve:websupport": "node php/dev/serve-static.mjs start --websupport",
+    "test:websupport": "node php/dev/test-websupport.mjs",
+    "snapshot:staging": "node scripts/run-php.mjs scripts/staging-data-snapshot.php",
+    "test:snapshot": "node scripts/test-staging-snapshot.mjs",
+    "test:package-guards": "node scripts/test-package-guards.mjs"
   },
   "dependencies": {
     "next": "16.3.8",

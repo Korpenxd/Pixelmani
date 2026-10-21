@@ -29,6 +29,17 @@ package public/                          → the web root (e.g. public_html/)
   the web root.
 - **Never upload** `.env*` files, the repository, `migration-export/` or
   `db/tools/`. None of them are in this package.
+- **Code and photos are deployed separately.**
+  - **Code (A):** everything except `media/`. It is disposable and replaced
+    by the next package.
+  - **Photos (B):** `<web root>/media/` with the database rows pointing at
+    them. They are persistent: photos uploaded through the live admin exist
+    only there.
+  - `media/` is uploaded only for the initial import (the cutover media
+    copy, step 5). A later code deployment uploads everything EXCEPT
+    `media/`, and never replaces, syncs-with-delete or clears
+    `<web root>/media/`.
+  - Importing or backfilling photos is its own approved step.
 
 ## 2. Private configuration
 

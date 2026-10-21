@@ -20,8 +20,12 @@
 # production
 /build
 
-# Loopia deployment package (npm run package:loopia; rebuilt from scratch every run)
+# Deployment packages (npm run package:loopia / package:websupport; rebuilt from scratch every run)
 /dist/
+
+# Websupport staging: the owner's backup of the host's web/.htaccess (account-specific
+# AuthUserFile path) and anything else local to one hosting account. Never committed.
+/deploy/websupport/*.local*
 
 # misc
 .DS_Store
