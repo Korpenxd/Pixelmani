@@ -69,9 +69,16 @@ function check(label, ok, detail = '') {
 async function request(path, { auth = GOOD, method = 'GET', headers = {}, body } = {}) {
   const h = { ...headers }
   if (auth) h.Authorization = auth
-  const response = await fetch(new URL(path, origin), { method, headers: h, body, redirect: 'manual' })
-  const buffer = Buffer.from(await response.arrayBuffer())
-  return { status: response.status, headers: response.headers, buffer, text: buffer.toString('utf8') }
+  try {
+    const response = await fetch(new URL(path, origin), { method, headers: h, body, redirect: 'manual' })
+    const buffer = Buffer.from(await response.arrayBuffer())
+    return { status: response.status, headers: response.headers, buffer, text: buffer.toString('utf8') }
+  } catch (error) {
+    // Unreachable, reset, TLS failure: a failed check with its cause (never a
+    // silent crash); status 0 then fails every check that uses this answer.
+    check(`${method} ${path} reached the server`, false, `network error: ${error.cause?.code ?? error.cause?.message ?? error.message}`)
+    return { status: 0, headers: new Headers(), buffer: Buffer.alloc(0), text: '' }
+  }
 }
 
 /** Content that only the protected site serves. A 401/403 page must contain none of it. */

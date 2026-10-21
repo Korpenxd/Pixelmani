@@ -51,6 +51,7 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import https from 'node:https'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -163,25 +164,65 @@ function writeTestConfig(file) {
   writeFileSync(file, `<?php\n// LOCAL TEST CONFIG for php/dev/serve-static.mjs (${modeName} mode). Deleted on stop.\nreturn json_decode(<<<'JSON'\n${json}\nJSON, true, 512, JSON_THROW_ON_ERROR);\n`, { mode: 0o600 })
 }
 
-/** A throwaway self-signed certificate for the TLS listener, or null without openssl. */
+/**
+ * A throwaway self-signed certificate for the TLS listener:
+ * { cert, key } or { failures } when no openssl binary could make one.
+ *
+ * Every binary gets a private minimal configuration (OPENSSL_CONF): some
+ * Windows builds (e.g. Strawberry Perl's) point at a compiled-in openssl.cnf
+ * that does not exist and then refuse `req`. PIXELMANI_OPENSSL, if set, is
+ * the only binary tried. Otherwise, in order: Apache's own openssl.exe (some
+ * builds cannot start outside Apache's DLL set), Git for Windows, then
+ * whatever `openssl` PATH finds.
+ */
 function makeCertificate(httpd) {
   const cert = path.join(runtime, 'tls.crt')
   const key = path.join(runtime, 'tls.key')
-  // Apache's own openssl.exe first; some builds cannot start outside Apache's
-  // DLL set, so fall back to any openssl on PATH (e.g. Git for Windows).
-  for (const binary of [path.join(path.dirname(httpd), 'openssl.exe'), 'openssl']) {
+  const conf = path.join(runtime, 'openssl.cnf')
+  writeFileSync(conf, '# serve-static.mjs: minimal configuration for the throwaway test certificate\n[req]\ndistinguished_name = dn\n[dn]\n')
+  const candidates = process.env.PIXELMANI_OPENSSL ? [process.env.PIXELMANI_OPENSSL] : [
+    path.join(path.dirname(httpd), 'openssl.exe'),
+    ...(process.platform === 'win32'
+      ? ['usr/bin/openssl.exe', 'mingw64/bin/openssl.exe'].map((p) => path.join(process.env.ProgramFiles ?? 'C:/Program Files', 'Git', p))
+      : []),
+    'openssl',
+  ].filter((binary) => binary === 'openssl' || existsSync(binary))
+  const failures = []
+  for (const binary of candidates) {
+    rmSync(cert, { force: true })
+    rmSync(key, { force: true })
     try {
       execFileSync(binary, [
         'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=pixelmani.test',
         '-addext', 'subjectAltName=DNS:pixelmani.test,DNS:pixelmani.se,DNS:www.pixelmani.se,DNS:staging.pixelmani.se',
         '-keyout', key, '-out', cert,
-      ], { stdio: 'pipe' })
-      return { cert: slash(cert), key: slash(key) }
-    } catch {
-      // try the next one
+      ], { stdio: 'pipe', env: { ...process.env, OPENSSL_CONF: conf } })
+      if (existsSync(cert) && existsSync(key) && readFileSync(cert, 'utf8').includes('BEGIN CERTIFICATE')) {
+        return { cert: slash(cert), key: slash(key) }
+      }
+      failures.push(`${binary}: no certificate written`)
+    } catch (error) {
+      const reason = error.code ?? (error.stderr?.toString().trim().split('\n')[0] || `exit status ${error.status}`)
+      failures.push(`${binary}: ${reason}`)
     }
   }
-  return null
+  return { failures }
+}
+
+/** Whether the TLS listener answers a handshake and an HTTP request (any status). */
+function tlsAnswers() {
+  return new Promise((resolve) => {
+    const req = https.request({
+      host: '127.0.0.1', port: tlsPort, path: '/api/health', servername: 'pixelmani.test',
+      headers: { Host: `pixelmani.test:${tlsPort}` }, rejectUnauthorized: false, agent: false, timeout: 5000,
+    }, (res) => {
+      res.resume()
+      resolve(true)
+    })
+    req.on('timeout', () => req.destroy(new Error('timeout')))
+    req.on('error', () => resolve(false))
+    req.end()
+  })
 }
 
 /** Package ownership of this start (package modes), and the Apache it launched. */
@@ -193,6 +234,7 @@ async function start() {
   if (packageMode) {
     // Never serve the packager's own working copies (.partial, .previous).
     if (path.basename(packageDir).startsWith('.')) fail(`${packageDir} is a packager working copy, not a package; refusing to serve it.`)
+    if (!existsSync(packageDir)) fail(`${packageDir} does not exist. Build the package first (npm run ${modeName === 'websupport' ? 'test:websupport' : 'package:loopia'}).`)
     // Ownership first: refused while the package is being rebuilt (or served
     // by another test server); held from here until `stop`.
     try {
@@ -210,7 +252,11 @@ async function start() {
         console.error(`serve-static: Apache (pid ${pid}) did not stop; the package stays owned. Run: node php/dev/serve-static.mjs stop`)
         return
       }
-      if (owner.wroteNote) rmSync(ownerNote(runtime), { force: true })
+      if (owner.wroteNote) {
+        // The test configuration and TLS key never outlive a failed start either.
+        for (const name of ['config.php', 'tls.key', 'tls.crt', 'openssl.cnf']) rmSync(path.join(runtime, name), { force: true })
+        rmSync(ownerNote(runtime), { force: true })
+      }
       owner.release()
     })
     for (const file of ['bootstrap.php', `${webRoot}/.htaccess`, `${webRoot}/index.html`, `${webRoot}/api/health.php`, 'vendor/autoload.php']) {
@@ -244,9 +290,20 @@ async function start() {
     TLS_BLOCK: '',
   }
   let tls = null
+  let tlsMissing = ''
   if (packageMode) {
     writeTestConfig(path.join(runtime, 'config.php'))
-    tls = makeCertificate(httpd)
+    const made = makeCertificate(httpd)
+    if (made.cert) {
+      tls = made
+    } else {
+      tlsMissing = made.failures.join('; ') || 'no openssl binary found'
+      // Tests that check https (test:websupport) set PIXELMANI_REQUIRE_TLS=1:
+      // then a missing listener is a startup failure, never a silent http-only server.
+      if (process.env.PIXELMANI_REQUIRE_TLS === '1') {
+        fail(`TLS is required (PIXELMANI_REQUIRE_TLS=1), but no openssl could make the test certificate: ${tlsMissing}. Set PIXELMANI_OPENSSL to a working openssl binary.`)
+      }
+    }
     if (tls) {
       values.TLS_BLOCK = [
         'LoadModule ssl_module modules/mod_ssl.so',
@@ -295,10 +352,12 @@ async function start() {
         response = await fetch(`http://127.0.0.1:${port}/api/health.php`, { headers })
       }
       if (response.ok || (modeName === 'websupport' && !basic && response.status === 401)) {
+        // With a certificate, the TLS listener must answer too before this counts as started.
+        if (tls && !(await tlsAnswers())) continue
         if (packageMode) {
           console.log(`Deployment package (${modeName}) served at http://pixelmani.test:${port}/  (no Node.js server)`)
           console.log(`  package: ${packageDir}`)
-          console.log(tls ? `  TLS:     https://pixelmani.test:${tlsPort}/ (self-signed; for curl -k --resolve tests)` : '  TLS:     not available (no openssl)')
+          console.log(tls ? `  TLS:     https://pixelmani.test:${tlsPort}/ (self-signed; for curl -k --resolve tests)` : `  TLS:     NOT available (${tlsMissing})`)
         } else {
           console.log(`Static export served at http://pixelmani.test:${port}/  (no Node.js server)`)
         }
@@ -311,7 +370,7 @@ async function start() {
       // not up yet
     }
   }
-  fail(`Apache did not answer on port ${port}. See ${path.join(runtime, 'error.log')}.`)
+  fail(`Apache did not answer on port ${port}${tls ? ` and TLS port ${tlsPort}` : ''}. See ${path.join(runtime, 'error.log')}.`)
 }
 
 /** stop/status without a mode flag cover every mode, so nothing is left running by accident. */
@@ -330,7 +389,7 @@ function stop() {
     }
     rmSync(file, { force: true })
     // The test configuration and TLS key never outlive the server.
-    for (const name of ['config.php', 'tls.key', 'tls.crt']) rmSync(path.join(instance.runtime, name), { force: true })
+    for (const name of ['config.php', 'tls.key', 'tls.crt', 'openssl.cnf']) rmSync(path.join(instance.runtime, name), { force: true })
     // Give the package back: only the ownership this server took, and only
     // once nothing of it runs (a start still in progress keeps it).
     let released = ''

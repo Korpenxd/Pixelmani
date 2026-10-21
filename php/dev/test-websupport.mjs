@@ -75,8 +75,15 @@ const hash = (secret) => execFileSync(php, ['-r', 'echo password_hash(stream_get
 function node(script, args, env = {}) {
   return spawnSync(process.execPath, [path.join(root, script), ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, ...env } })
 }
+/** Why a child script failed: its exit status or spawn error, and the end of its stderr. */
+function childFailure(r) {
+  const how = r.error ? `spawn error ${r.error.code ?? r.error.message}` : r.signal ? `killed by ${r.signal}` : `exit status ${r.status}`
+  const err = (r.stderr ?? '').trim().split('\n').slice(-6).join(' | ')
+  return `${how}${err ? `; stderr: ${err}` : ''}`
+}
 function serve(command, env = {}) {
-  const r = node('php/dev/serve-static.mjs', [command, '--websupport', pkg], env)
+  // The https checks (matrix, run B) need the TLS listener: no silent http-only server.
+  const r = node('php/dev/serve-static.mjs', [command, '--websupport', pkg], { PIXELMANI_REQUIRE_TLS: '1', ...env })
   if (command === 'start' && r.status !== 0) throw new Error(`server did not start:\n${r.stderr}${r.stdout}`)
   return r
 }
@@ -336,13 +343,14 @@ try {
 
   const matrix = node('php/dev/test-package-http.mjs', ['--websupport', pkg], env)
   const matrixSummary = matrix.stdout.trim().split('\n').pop()
-  process.stdout.write(matrix.stdout.split('\n').filter((l) => l.startsWith('FAIL')).join('\n'))
-  check(`HTTP matrix behind Basic Auth: ${matrixSummary}`, matrix.status === 0)
+  const matrixFails = matrix.stdout.split('\n').filter((l) => l.startsWith('FAIL'))
+  if (matrixFails.length) process.stdout.write(`${matrixFails.join('\n')}\n`)
+  check(`HTTP matrix behind Basic Auth: ${matrixSummary}`, matrix.status === 0, childFailure(matrix))
 
   const verifyEnv = { PIXELMANI_STAGING_USER: basicUser, PIXELMANI_STAGING_PASSWORD: basicPassword, PIXELMANI_STAGING_ADMIN_PASSWORD: adminPassword }
   const verifyA = node('scripts/verify-staging.mjs', [`--base=http://pixelmani.test:${PORT}`, '--site-url=https://staging.pixelmani.se', ...knownMissing, '--admin', '--contact=sent'], verifyEnv)
   process.stdout.write(`${verifyA.stdout.trimEnd().split('\n').map((l) => `   ${l}`).join('\n')}\n`)
-  check('verify-staging (local, http): all checks', verifyA.status === 0)
+  check('verify-staging (local, http): all checks', verifyA.status === 0, childFailure(verifyA))
   serve('stop')
 
   // -------------------------------------------------------------------------
@@ -359,7 +367,7 @@ try {
   })
   const verifyB = node('scripts/verify-staging.mjs', [`--base=https://pixelmani.test:${TLS_PORT}`, '--site-url=https://staging.pixelmani.se', ...knownMissing, '--insecure', '--admin', '--contact=configuration_error'], verifyEnv)
   process.stdout.write(`${verifyB.stdout.trimEnd().split('\n').map((l) => `   ${l}`).join('\n')}\n`)
-  check('verify-staging (staging config, https): all checks', verifyB.status === 0)
+  check('verify-staging (staging config, https): all checks', verifyB.status === 0, childFailure(verifyB))
   const logs = path.join(pkg, 'storage', 'logs')
   const logText = existsSync(logs) ? readdirSync(logs).filter((f) => f.endsWith('.log')).map((f) => readFileSync(path.join(logs, f), 'utf8')).join('') : ''
   check('the package wrote its own log (storage/ above web/ is writable and used)', logText.length > 0)

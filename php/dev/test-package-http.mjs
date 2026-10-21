@@ -61,7 +61,7 @@ const marker = `PHP-EXECUTED-${randomBytes(6).toString('hex')}`
 function request({ scheme = 'http', host = LOCAL, path: p, method = 'GET', headers = {} }) {
   const port = scheme === 'https' ? TLS_PORT : PORT
   const lib = scheme === 'https' ? https : http
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const req = lib.request({
       host: '127.0.0.1', port, path: p, method, headers: { Host: host, ...AUTH, ...headers },
       servername: host.split(':')[0], rejectUnauthorized: false, agent: false,
@@ -74,7 +74,9 @@ function request({ scheme = 'http', host = LOCAL, path: p, method = 'GET', heade
         resolve({ status: res.statusCode, values, body: Buffer.concat(chunks).toString('utf8') })
       })
     })
-    req.on('error', reject)
+    // A connection-level error (refused, reset, TLS) is a failed test, not a
+    // crash: it is reported with its code and the summary is still printed.
+    req.on('error', (error) => resolve({ status: 0, values: () => [], body: '', error: error.code ?? error.message }))
     req.end()
   })
 }
@@ -86,6 +88,7 @@ async function t(label, req, expect) {
   const r = await request(req)
   const h = (n) => r.values(n)
   const problems = []
+  if (r.error) problems.push(`network error ${r.error}`)
   const statuses = Array.isArray(expect.status) ? expect.status : [expect.status]
   if (!statuses.includes(r.status)) problems.push(`status ${r.status}`)
   if ('location' in expect && (h('location')[0] ?? null) !== expect.location) problems.push(`location ${h('location')[0]}`)
@@ -302,7 +305,7 @@ try {
     const ok = r.status === 200 && hops <= 1
     if (ok) pass++
     else fail++
-    results.push({ ok, label: `loop check ${start.join(' ')}`, scheme: start[0], host: start[1], method: 'GET', path: start[2], status: r.status, location: `${hops} hop(s) → ${scheme}://${host}${p}`, type: '', cache: '', hsts: '', csp: '', problems: ok ? '' : 'redirect chain/loop' })
+    results.push({ ok, label: `loop check ${start.join(' ')}`, scheme: start[0], host: start[1], method: 'GET', path: start[2], status: r.status, location: `${hops} hop(s) → ${scheme}://${host}${p}`, type: '', cache: '', hsts: '', csp: '', problems: ok ? '' : r.error ? `network error ${r.error}` : 'redirect chain/loop' })
   }
 } finally {
   for (const file of Object.keys(decoys)) rmSync(`${PUB}/${file}`, { force: true })
