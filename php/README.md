@@ -68,6 +68,7 @@ php/
   dev/serve-static.mjs            starts/stops those test servers
   dev/test-package-http.mjs       `npm run test:package`: HTTP matrix against a package
   dev/test-websupport.mjs         `npm run test:websupport`: the Websupport staging package behind a throwaway Basic Auth
+  dev/test-gate-tool.mjs          `npm run test:gate-tool`: the .htaccess install tool alone (file types, links), PHP CLI only
 
 deploy/loopia/           overlay copied into the packages by scripts/package-deploy.mjs:
   public/.htaccess       the web-root Apache rules, shared by both targets (+ public/api/, public/media/)
@@ -77,7 +78,7 @@ deploy/websupport/       Websupport staging (staging.pixelmani.se):
   config/config.staging.example.php   staging config template
   capability-probe.php   one-off host check (PHP 8.4, open_basedir, writing, WebP)
   DEPLOY.md              the exact staging deployment procedure
-  staging-auth.local.htaccess   the owner's backup of Websupport's web/.htaccess (gitignored, never in git)
+  staging-auth.local.htaccess   the owner's copy of Websupport's gate, staging.pixelmani.se/.htaccess (gitignored, never in git)
 ```
 
 `config/`, `src/`, `storage/` and `tests/` each contain a deny-all `.htaccess`
@@ -1084,9 +1085,13 @@ these differences (procedure: `deploy/websupport/DEPLOY.md`):
     `noindex, nofollow`
   - the packager checks this, and refuses a production build for staging
     and vice versa (marker `out/.pixelmani-build.json`, never shipped)
-- **Password protection:** the owner's backup of Websupport's `web/.htaccess`
-  goes to `deploy/websupport/staging-auth.local.htaccess` (gitignored) or
-  `--auth-file`.
+- **Password protection:** on this account Websupport's gate is
+  `staging.pixelmani.se/.htaccess` (+ `.htpasswd`), the folder ABOVE `web/`.
+  - Apache applies it to everything below, so `web/` is protected without a
+    `web/.htaccess`. Both files are never touched.
+  - The owner's downloaded copy of that `.htaccess` goes to
+    `deploy/websupport/staging-auth.local.htaccess` (gitignored) or
+    `--auth-file`.
   - **Accepted:** only `AuthType Basic`, `AuthName "…"`,
     `AuthUserFile <absolute path, not under web/>` and
     `Require valid-user`. Anything else fails the run.
@@ -1098,18 +1103,38 @@ these differences (procedure: `deploy/websupport/DEPLOY.md`):
   - **No auth file:** no package (fail closed).
   - **Leak scan:** only that exact `AuthUserFile` line is exempt.
 - **Gate installation without a gap:** the staging package has NO
-  `web/.htaccess`, so a bulk upload of `web/` can never overwrite the live
-  gate in place.
-  - The file is `install/web.htaccess`, uploaded as `web/.htaccess.new`.
+  `web/.htaccess`, so a bulk upload of `web/` can never create or overwrite
+  one.
+  - The file is `install/web.htaccess`, uploaded as `web/.htaccess.new`
+    (Apache ignores that name).
   - `install/pm-gate-swap-<token>.php` (rendered from
     `deploy/websupport/gate-swap.template.php`) activates it with ONE
-    `rename()` over the active file. On Linux that is atomic `rename(2)`.
-  - It refuses unless the request is authenticated (`REMOTE_USER`), both
-    files carry the same `AuthUserFile`, the new file matches its SHA-256,
-    the server is POSIX and both files are on one filesystem.
-  - A preflight first proves Apache accepts the new file (in a test folder).
-  - It keeps a copy of the old file and deletes itself.
-  - Rolling the site back never touches `.htaccess`.
+    `rename()`. On Linux that is atomic `rename(2)`.
+  - It detects the layout:
+    - **`parent`** (this account): no `web/.htaccess`, gate in the folder
+      above. The new file is renamed into the free name, and the parent file
+      is only read and verified unchanged afterwards.
+    - **`web`:** the gate is `web/.htaccess`; it is copied to a backup and
+      replaced.
+  - **Why the new file carries the same gate:** under Apache's default
+    `AuthMerging Off`, a `Require` in `web/.htaccess` *replaces* the
+    parent's. So it carries the identical gate (same `AuthUserFile`), and
+    nothing in `web/` may grant. It then also holds if the parent gate is
+    ever removed.
+  - **It refuses unless:**
+    - Apache authenticated the request (`REMOTE_USER`; not `PHP_AUTH_USER`,
+      which a client can forge)
+    - the current gate is exactly Websupport's four lines
+    - the new file carries the same `AuthUserFile` and matches its SHA-256
+    - the server is POSIX and everything is on one filesystem
+  - A preflight first proves Apache accepts the new file in a test folder.
+    The preflight only creates, and the install checks that folder by
+    `lstat` and against its `stamp.json`.
+  - After the install the tool deletes itself, but never the preflight
+    folder: PHP could only delete through the folder's path, which could be
+    swapped for a link. The folder stays for a verified manual deletion
+    (DEPLOY.md step 7).
+  - Rolling the site back never touches either gate.
 - **Canonical redirects:** they apply only to `pixelmani.se` /
   `www.pixelmani.se`, so staging is never sent to production, and HSTS is
   not sent for it.
@@ -1136,8 +1161,18 @@ these differences (procedure: `deploy/websupport/DEPLOY.md`):
 - **Remote checks:**
   - `deploy/websupport/capability-probe.php`: a one-off, self-deleting
     probe for PHP 8.4, `open_basedir`, writing, `flock`, WebP, limits,
-    `REMOTE_ADDR`, and what the swap tool needs: the authenticated user
-    visible to PHP, POSIX, and `rename()` over an existing file in `web/`.
+    `REMOTE_ADDR`, and what the install tool needs: the authenticated user
+    from Apache (`REMOTE_USER`), POSIX, `rename()` in `web/`, and where the
+    gate is.
+  - `scripts/verify-staging-preinstall.mjs`: the MANDATORY pre-install
+    authentication matrix against the live host (DEPLOY.md step 7, item 4).
+    - It holds no credentials at all.
+    - Before `web/.htaccess` exists, every listed route (home, gallery,
+      admin, a real `_next` asset, the API, a real photo, a nonexistent
+      path, the install tool) must answer 401 with a Basic challenge: no
+      redirect, no content. A 403 does not count.
+    - This is the only proof of what Websupport's Apache does with the
+      parent gate. The local tests only simulate it.
   - `scripts/verify-staging.mjs`: a read-only check of the deployed site:
     401 + Basic challenge on every route without or with wrong credentials,
     then the site itself, optionally the admin.
@@ -1146,9 +1181,16 @@ these differences (procedure: `deploy/websupport/DEPLOY.md`):
 `.htpasswd`:
 
 - **Validator:** it refuses bad auth files.
-- **Install:** it starts from the host's state (Websupport's four lines as
-  `web/.htaccess`) and installs with the swap tool: check, preflight, then
-  install.
+- **Install, both layouts:**
+  - **`web`:** Websupport's four lines as `web/.htaccess`.
+  - **`parent`, this account:** the four lines in the folder above `web/`,
+    which the local Apache reads as the host does, and no `web/.htaccess`.
+    A control shows the same layout without the parent gate is open. The
+    install never writes the parent. A `web/.htaccess` cut off anywhere
+    stays closed. A forged `Authorization` header behind no gate is
+    refused. A grant in `web/` is shown to override the parent.
+
+  In both: check, preflight, then install.
   - Throughout, parallel loops of unauthenticated requests must never get
     anything but 401/403.
   - Tampered files, a different password file and a password-less call are
@@ -1156,6 +1198,44 @@ these differences (procedure: `deploy/websupport/DEPLOY.md`):
   - Application rollback, with the gate kept, is likewise never exposed.
   - **Control:** the former rename-away/rename-in hand procedure is shown to
     expose content.
+  - **Only a regular file is installed, in both layouts.** At
+    `.htaccess.new`, a missing file, a folder, a junction and symbolic
+    links (to the right bytes or to other bytes) are refused by check and
+    install, with nothing changed.
+  - **A failed rename** (the file held open by another process) changes
+    nothing and keeps the tool and preflight for a retry. The installed
+    file is a regular file, and the parent file is untouched.
+  - **The pre-install matrix** passes in the parent-gate state and, as a
+    control, fails once the parent gate is removed.
+- **`npm run test:gate-tool`:** the install tool alone, run with the PHP
+  command line on disposable folders (no Apache), in both layouts.
+  - Refused at `.htaccess.new`: symbolic links to the right bytes, to other
+    bytes, dangling, or to a folder; a folder; a FIFO (Linux) or a junction
+    (Windows); a missing file.
+  - Also refused: a symlinked gate file, and no `REMOTE_USER`.
+  - **The preflight folder:** the preflight only creates (a new folder,
+    exclusive files, `stamp.json`). The install relies on it only if it is
+    a real folder (by `lstat`), the very one created, with its three files
+    unchanged.
+    - **Refused, nothing installed, nothing deleted:** the folder missing,
+      replaced by a symbolic link or a junction (to a copy, or to the
+      account folder above `web/`), a changed `probe.txt` or `.htaccess`,
+      an extra file, a fresh look-alike copy, an earlier folder the tool did
+      not create (with a planted link inside).
+    - Repeated attempts stay refused. After the folder is deleted by hand, a
+      fresh preflight and install work.
+    - After install the folder is LEFT in place and reported as such. A tool
+      that cannot delete itself is reported with a `WARN`, never as done.
+  - After install, `web/.htaccess` is a regular file with the expected
+    SHA-256, and Websupport's `.htaccess` and `.htpasswd` above `web/` are
+    byte for byte unchanged.
+  - **Negative regression:** the tool of commit `a3e5f3b` is run against a
+    preflight folder replaced by a junction (Windows) or a symbolic link
+    (Linux) to the account folder. Its cleanup deletes the account's
+    `.htaccess`. The current tool refuses the same fixture.
+  - **Symbolic links need Developer Mode or an elevated shell on Windows.**
+    Without them those cases are reported as `SKIP`, never as passed. On
+    Linux all run.
 - **Negative controls:** it shows that the former media rule and a naive
   `Require all granted` + `Require valid-user` merge really serve content
   without a password.
@@ -1353,6 +1433,7 @@ php php/tests/smoke.php
 npm test        # admin and contact-form frontend logic (tests/*.test.ts, Node's built-in test runner)
 npm run package:loopia && npm run serve:package && npm run test:package   # production rules, in the package
 npm run test:websupport   # Websupport staging package behind a throwaway Basic Auth
+npm run test:gate-tool    # the .htaccess install tool alone: only regular files, never links (PHP CLI)
 ```
 
 The smoke tests cover configuration validation, error hiding in production,

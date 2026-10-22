@@ -117,15 +117,15 @@ Webbhotellet är Websupport. Staging-sajten är lösenordsskyddad (HTTP Basic Au
 
 ```bash
 npm run test:websupport     # bygg, servera och testa staging-paketet lokalt bakom ett tillfälligt lösenord
-npm run package:websupport  # staging-paketet i dist/websupport/ (kräver ägarens kopia av Websupports web/.htaccess)
+npm run package:websupport  # staging-paketet i dist/websupport/ (kräver ägarens kopia av Websupports lösenordsskydd, staging.pixelmani.se/.htaccess)
 npm run snapshot:staging -- --target-db=<namn>  # engångs-SQL med lokala testdata, bara för den namngivna, tomma staging-databasen
 ```
 
-- **Lösenordsskyddet:** ägarens kopia av Websupports `web/.htaccess` sparas som `deploy/websupport/staging-auth.local.htaccess` (gitignorerad, aldrig i git).
+- **Lösenordsskyddet:** Websupports skydd ligger i mappen ovanför webbroten, `staging.pixelmani.se/.htaccess` (+ `.htpasswd`), och skyddar hela `web/`. De filerna rörs aldrig. Ägarens kopia av den `.htaccess` sparas som `deploy/websupport/staging-auth.local.htaccess` (gitignorerad, aldrig i git).
   - Paketet byggs inte utan den.
   - Bara de fyra Basic Auth-raderna godtas.
   - Inga andra regler i webbroten kan släppa förbi lösenordet.
-  - `web/.htaccess` byts aldrig för hand: paketets fil aktiveras med ett genererat verktyg som byter filen atomärt (se steg 7 i DEPLOY.md).
+  - `web/.htaccess` skapas aldrig för hand: paketets fil, med samma lösenordsskydd, aktiveras med ett genererat verktyg i ett atomärt steg medan skyddet ovanför är aktivt hela tiden (se steg 7 i DEPLOY.md).
 - **Steg för steg (uppladdning, konfiguration, kontroller, återställning):** [`deploy/websupport/DEPLOY.md`](deploy/websupport/DEPLOY.md).
 
 ## Produktionsdomän
@@ -177,6 +177,7 @@ npm run serve:static   # testa out/ lokalt med Apache + PHP, utan Node
 npm run package:loopia # driftpaket för Loopia (dist/loopia/)
 npm run package:websupport # staging-paket för Websupport (dist/websupport/)
 npm run test:websupport # testa staging-paketet lokalt bakom Basic Auth
+npm run test:gate-tool  # installationsverktyget för .htaccess: bara vanliga filer, aldrig länkar
 npm run snapshot:staging -- --target-db=<namn> # lokala testdata som SQL för staging
 npm run test:package-guards # paketeringens skydd (ägarskap, uppladdningar, avbrutna byten, serverkonfiguration)
 npm run test:snapshot  # SQL-ögonblicksbildens skydd mot fel databas

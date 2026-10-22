@@ -98,11 +98,15 @@ writeTest($privateRoot, 'private root (storage/)');
 writeTest($webDir, 'web root (media/)');
 
 // ---------------------------------------------------------------- the .htaccess swap tool's needs
-// install/pm-gate-swap-*.php replaces web/.htaccess with ONE rename() over
-// the active file. That is atomic only with POSIX rename(2) on one
-// filesystem, and the tool only runs when PHP can see the authenticated user.
-$authUser = (string) ($_SERVER['REMOTE_USER'] ?? $_SERVER['REDIRECT_REMOTE_USER'] ?? $_SERVER['PHP_AUTH_USER'] ?? '');
-line($authUser !== '' ? 'PASS' : 'FAIL', 'PHP sees the Basic Auth user (REMOTE_USER)', $authUser !== '' ? 'yes' : 'no: the swap tool cannot prove the gate; STOP before step 7');
+// install/pm-gate-swap-*.php puts web/.htaccess in place with ONE rename().
+// That is atomic only with POSIX rename(2) on one filesystem, and the tool
+// only runs when Apache tells PHP the authenticated user (REMOTE_USER).
+// PHP_AUTH_USER does not count: PHP fills it from any Authorization header a
+// client sends, even where no gate is active.
+$authUser = (string) ($_SERVER['REMOTE_USER'] ?? $_SERVER['REDIRECT_REMOTE_USER'] ?? '');
+line($authUser !== '' ? 'PASS' : 'FAIL', 'PHP sees the Basic Auth user (REMOTE_USER from Apache)', $authUser !== '' ? 'yes' : 'no: the swap tool cannot prove the gate; STOP before step 7');
+line('INFO', 'PHP_AUTH_USER (client header, not proof)', isset($_SERVER['PHP_AUTH_USER']) ? 'set' : 'not set');
+line('INFO', 'gate location', is_file($webDir . '/.htaccess') ? 'web/.htaccess exists' : (is_file($privateRoot . '/.htaccess') ? 'no web/.htaccess; the folder above web/ has an .htaccess' : 'no .htaccess in web/ or above'));
 line(PHP_OS_FAMILY !== 'Windows' ? 'PASS' : 'FAIL', 'POSIX server (rename(2) replaces atomically)', PHP_OS_FAMILY);
 $renameDir = $webDir . DIRECTORY_SEPARATOR . 'pm-probe-rename-' . bin2hex(random_bytes(4));
 if (@mkdir($renameDir, 0755)) {

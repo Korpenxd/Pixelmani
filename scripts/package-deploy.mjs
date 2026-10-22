@@ -12,7 +12,8 @@
  *                           with none (refused, no override)
  *            --no-zip
  *            --auth-file=<path>   websupport-staging only: the owner's backup of
- *                                 the Websupport .htaccess (Basic Auth). Default:
+ *                                 the host's Basic Auth .htaccess (on the Websupport account:
+ *                                 staging.pixelmani.se/.htaccess, the folder above web/). Default:
  *                                 $PIXELMANI_STAGING_AUTH_FILE, then
  *                                 deploy/websupport/staging-auth.local.htaccess (gitignored)
  *            --recover      finish or undo an interrupted replacement (see below), then stop
@@ -531,7 +532,8 @@ for (const sub of ['api/.htaccess', 'media/.htaccess']) {
 console.log('ok: one access gate in the web-root rules; nested rules only deny')
 
 /**
- * The owner's backup of the Websupport .htaccess: exactly the four Basic Auth
+ * The owner's backup of the host's Basic Auth .htaccess (on the Websupport
+ * account the folder ABOVE web/ holds it): exactly the four Basic Auth
  * directives the hosting panel writes. Anything else is refused, so the file
  * cannot smuggle in other rules. The AuthUserFile path is kept byte for byte
  * and never printed in full.
@@ -544,7 +546,8 @@ function readStagingAuth() {
   if (!existsSync(file)) {
     fail(`staging auth file not found (${slash(path.relative(root, file))}).\n` +
       '  Fail closed: a Websupport staging package is never built without the password protection.\n' +
-      '  Save your backup of the Websupport web/.htaccess as deploy/websupport/staging-auth.local.htaccess\n' +
+      "  Save your backup of Websupport's Basic Auth .htaccess (staging.pixelmani.se/.htaccess, above web/)\n" +
+      '  as deploy/websupport/staging-auth.local.htaccess\n' +
       '  (gitignored) or pass --auth-file=<path>. See deploy/websupport/DEPLOY.md.')
   }
   const raw = readFileSync(file)
@@ -764,9 +767,9 @@ if (stagingAuth) {
   // still asks for the password or fails with a 500, never serves content.
   const gate = [
     ...stagingAuth.lines,
-    "# ^ The access gate (Websupport staging): HTTP Basic Auth from the owner's backup",
-    "#   of the host's web/.htaccess, validated by package:websupport. The ONLY access",
-    '#   grant in the web root: every page, API call, photo and file needs the password.',
+    "# ^ The access gate (Websupport staging): HTTP Basic Auth, the same four lines as the",
+    "#   host's own gate (backed up by the owner, validated by package:websupport). The ONLY",
+    '#   access rule in the web root: every page, API call, photo and file needs the password.',
     '# Staging is never indexed, whatever robots.txt says.',
     'Header always set X-Robots-Tag "noindex, nofollow, noarchive"',
     GATE_END,

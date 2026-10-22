@@ -287,6 +287,9 @@ async function start() {
     ROOT: slash(root),
     PACKAGE: packageMode ? slash(packageDir) : '',
     WEBROOT: webRoot,
+    PACKAGE_ROOT_OVERRIDE: modeName === 'websupport' ? 'AuthConfig' : 'None',
+    PACKAGE_ROOT_REQUIRE: modeName === 'websupport' ? 'Require all granted' : '# (no access here; only the web root below)',
+    WEBROOT_REQUIRE: modeName === 'websupport' ? '# (inherited from the account folder above, as on the host)' : 'Require all granted',
     TLS_BLOCK: '',
   }
   let tls = null

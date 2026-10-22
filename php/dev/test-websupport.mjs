@@ -14,15 +14,27 @@
  *      auth file with the four lines Websupport's panel writes, in a temp dir
  *   2. the auth-file validator refuses unsafe input (fail closed)
  *   3. `package:websupport --local-test` with the fixture (dist/websupport-localtest/)
- *   4. negative controls: a naive merge ("Require all granted" left in place,
+ *   4a. layout "web" (the gate is web/.htaccess itself): installing the
+ *      package's web/.htaccess with the generated swap tool (check, preflight,
+ *      atomic install) and rolling the site back, while unauthenticated
+ *      requests hammer the site: never anything but 401/403; tampering and a
+ *      password-less call are refused; the former manual rename procedure is
+ *      shown to expose content
+ *   4c. layout "parent", the actual Websupport account: the gate is the
+ *      .htaccess of the folder ABOVE web/ (the local Apache reads it, as the
+ *      host does) and there is no web/.htaccess. Before activation every
+ *      route needs the password (control: without the parent gate it is
+ *      open); the tool detects the layout, refuses a non-standard parent
+ *      file, another password file, a forged Authorization header and the
+ *      absence of any gate; the install creates web/.htaccess under a hammer
+ *      with no exposure, never writes the parent file; a web/.htaccess cut off
+ *      anywhere stays closed; the installed file holds even without the
+ *      parent gate; a grant in web/ would override the parent (control)
+ *   4b. negative controls: a naive merge ("Require all granted" left in place,
  *      or a grant in media/.htaccess) really lets content through without a
- *      password, so the tests below are able to see a bypass
- *   4b. installing the package's web/.htaccess with the generated swap tool
- *      (check, preflight, atomic install) and rolling the site back, while
- *      unauthenticated requests hammer the site: never anything but 401/403;
- *      tampering and a password-less call are refused; the former manual
- *      rename procedure is shown to expose content
- *   5. run A, APP_ENV=local over http: the full HTTP matrix (every request
+ *      password, so the tests are able to see a bypass
+ *   5. run A, APP_ENV=local over http, in the account's post-activation state
+ *      (parent gate + the package's web/.htaccess): the full HTTP matrix (every request
  *      authenticated) + scripts/verify-staging.mjs with admin login and one
  *      contact message to the local Mailpit; a Websupport default index.php
  *      placed in web/ is never served
@@ -32,9 +44,9 @@
  *   7. cleanup: server stopped, fixture and test package deleted
  */
 
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -56,6 +68,12 @@ function check(label, ok, detail = '') {
   if (ok) pass++
   else fail++
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${!ok && detail ? `   !! ${detail}` : ''}`)
+}
+/** A case this machine cannot set up: reported, counted separately, never counted as passed. */
+const skipped = []
+function skip(label, reason) {
+  skipped.push(label)
+  console.log(`SKIP  ${label}   -- ${reason}`)
 }
 function section(title) {
   console.log(`\n== ${title}`)
@@ -185,6 +203,79 @@ try {
       placeSwapTool()
     }
     const tool = (query, headers = basicHeader) => get(`/${swapSource}?${query}`, headers).then(async (r) => ({ status: r.status, text: await r.text() }))
+    const isRegular = (file) => { try { const s = lstatSync(file); return s.isFile() && !s.isSymbolicLink() } catch { return false } }
+    const incoming = path.join(web, '.htaccess.new')
+
+    /**
+     * Everything at web/.htaccess.new that is not the uploaded regular file is
+     * refused by check AND install, with nothing changed: missing, a folder, a
+     * junction (Windows reparse point), a symbolic link to the right bytes or
+     * to other bytes. `prepare` puts the layout in its pre-install state,
+     * `unchanged` says whether the gate files are as before.
+     */
+    async function incomingTypeCases(layoutName, prepare, unchanged) {
+      const targets = path.join(fixture, `link-targets-${layoutName.replace(/\W+/g, '-')}`)
+      mkdirSync(targets, { recursive: true })
+      const validTarget = path.join(targets, 'valid.htaccess')
+      const otherTarget = path.join(targets, 'other.htaccess')
+      writeFileSync(validTarget, ours)
+      writeFileSync(otherTarget, `${ours}# other bytes\n`)
+      mkdirSync(path.join(targets, 'dir'), { recursive: true })
+      const cases = [
+        ['missing', () => {}, /web\/\.htaccess\.new is missing/],
+        ['a directory', () => mkdirSync(incoming), /web\/\.htaccess\.new is a directory/],
+        ['a junction (reparse point)', () => symlinkSync(path.join(targets, 'dir'), incoming, 'junction'), /web\/\.htaccess\.new is (not a regular file|a symbolic link|a directory)/],
+        ['a symlink to the RIGHT bytes (valid SHA-256)', () => symlinkSync(validTarget, incoming, 'file'), /web\/\.htaccess\.new is a symbolic link/],
+        ['a symlink to other bytes', () => symlinkSync(otherTarget, incoming, 'file'), /web\/\.htaccess\.new is a symbolic link/],
+      ]
+      for (const [label, make, reason] of cases) {
+        prepare()
+        rmSync(incoming, { recursive: true, force: true })
+        try {
+          make()
+        } catch (error) {
+          // Windows without Developer Mode or elevation cannot create file symlinks.
+          skip(`${layoutName}: .htaccess.new as ${label}`, `the OS refused to create it here (${error.code}); runs on Linux, or on Windows with Developer Mode / an elevated shell`)
+          continue
+        }
+        const checked = await tool('action=check')
+        const installed = await tool(`action=install&confirm=${token}&preflight=passed`)
+        check(`${layoutName}: .htaccess.new as ${label} → refused by check and install, nothing changed`,
+          checked.status === 409 && reason.test(checked.text) && installed.status === 409 && reason.test(installed.text) && unchanged()
+            && readFileSync(validTarget, 'utf8') === ours && readFileSync(otherTarget, 'utf8') === `${ours}# other bytes\n`,
+          `${checked.status}/${installed.status} ${checked.text.split('\n').filter((l) => l.startsWith('STOP')).join(' | ')}`)
+        rmSync(incoming, { recursive: true, force: true })
+      }
+      prepare()
+      const accepted = await tool('action=check')
+      check(`${layoutName}: .htaccess.new as the uploaded regular file → accepted by check`, accepted.status === 200 && /is a regular file and matches the package/.test(accepted.text))
+      rmSync(targets, { recursive: true, force: true })
+    }
+
+    /**
+     * A rename that really fails: on Windows, another process holds
+     * .htaccess.new open without delete sharing for longer than the tool
+     * retries. The install must change nothing and say so; a retry afterwards works.
+     */
+    async function failedRename(layoutName, unchanged, expected) {
+      if (process.platform !== 'win32') {
+        skip(`${layoutName}: failed rename`, 'the lock used to force it is Windows-only')
+        return
+      }
+      const lock = spawn('powershell.exe', ['-NoProfile', '-Command',
+        `$f = [System.IO.File]::Open('${incoming.replaceAll("'", "''")}', 'Open', 'Read', 'Read'); 'locked'; Start-Sleep -Milliseconds 9000; $f.Close()`])
+      const released = new Promise((resolve) => lock.on('exit', resolve))
+      await new Promise((resolve, reject) => {
+        lock.stdout.on('data', (d) => { if (String(d).includes('locked')) resolve() })
+        lock.on('exit', () => reject(new Error('the lock helper exited early')))
+      })
+      const failed = await tool(`action=install&confirm=${token}&preflight=passed`)
+      await released
+      check(`${layoutName}: a rename that fails → 500, "${expected}", nothing changed, tool and preflight kept for a retry`,
+        failed.status === 500 && failed.text.includes(expected) && /Nothing was changed/.test(failed.text) && unchanged()
+          && isRegular(incoming) && existsSync(path.join(web, swapSource)) && existsSync(path.join(web, `pm-preflight-${token}`)),
+        `${failed.status} ${failed.text.split('\n').filter((l) => /STOP|RESULT/.test(l)).join(' | ')}`)
+    }
     // Unauthenticated requests in parallel loops; anything but 401/403 (or a
     // fail-closed 500) is content or information without the password.
     const photoRoute = `/media/uploads/${readdirSync(path.join(web, 'media', 'uploads')).find((f) => f.endsWith('.webp'))}`
@@ -244,9 +335,9 @@ try {
       install = await tool(`action=install&confirm=${token}&preflight=passed`)
     }
     const result = await h.stop()
-    check('install: web/.htaccess is now the package file, swapped atomically',
-      install.status === 200 && readFileSync(htFile, 'utf8') === ours && !existsSync(path.join(web, '.htaccess.new')), install.text.split('\n').filter((l) => /STOP|WARN/.test(l)).join(' | '))
-    check('install: the tool deleted itself and the preflight folder', !existsSync(path.join(web, swapSource)) && !existsSync(path.join(web, `pm-preflight-${token}`)))
+    check('install: web/.htaccess is now the package file (a regular file), swapped atomically',
+      install.status === 200 && isRegular(htFile) && readFileSync(htFile, 'utf8') === ours && !existsSync(path.join(web, '.htaccess.new')), install.text.split('\n').filter((l) => /STOP|WARN/.test(l)).join(' | '))
+    check('install: the tool deleted itself; the preflight folder is LEFT in place (reported, for manual deletion)', !existsSync(path.join(web, swapSource)) && lstatSync(path.join(web, `pm-preflight-${token}`)).isDirectory() && /LEFT {2}the preflight folder/.test(install.text) && !/preflight folder removed/.test(install.text))
     check('install: a verified copy of Websupport\'s file was kept', readFileSync(path.join(web, '.htaccess.websupport-backup'), 'utf8') === websupportOriginal)
     check(`no unauthenticated response other than 401/403 during check, preflight and install (${result.total} responses, ${result.failedConnections} failed connections)`, result.exposures.length === 0 && result.total >= 200, result.exposures.slice(0, 6).join('; ') || `only ${result.total} responses`)
     check('after install: the site works with the password', (await get('/showcase', basicHeader)).status === 200 && (await get('/api/photos', basicHeader)).status === 200)
@@ -268,6 +359,14 @@ try {
     const noAuth = await get(`/pm-noauth-${token}/${swapSource}?action=check`).then(async (r) => ({ status: r.status, text: await r.text() }))
     check('swap tool reached WITHOUT the password refuses (no REMOTE_USER)', noAuth.status === 409 && /did not come through HTTP Basic Auth/.test(noAuth.text))
     rmSync(unprotected, { recursive: true, force: true })
+
+    // Only the uploaded regular file is ever installed; a failed rename changes nothing (layout "web").
+    const webUnchanged = () => isRegular(htFile) && readFileSync(htFile, 'utf8') === websupportOriginal
+    await incomingTypeCases('layout "web"', websupportState, webUnchanged)
+    websupportState()
+    await tool(`action=preflight&confirm=${token}`)
+    await failedRename('layout "web"', webUnchanged, 'rename failed; the active .htaccess is unchanged')
+    rmSync(path.join(web, `pm-preflight-${token}`), { recursive: true, force: true })
 
     // Negative control: the former hand procedure (rename away, then rename in).
     websupportState()
@@ -294,6 +393,139 @@ try {
     rmSync(path.join(web, '.htaccess.websupport-backup'), { force: true })
     writeFileSync(htFile, ours)
     check('restored: the package web root is back as built', (await get('/')).status === 401 && (await get('/', basicHeader)).status === 200)
+
+    // -----------------------------------------------------------------------
+    section('4c. The actual Websupport layout: the gate in the folder ABOVE web/ (staging.pixelmani.se/.htaccess)')
+    // On the account, Websupport's four lines live in the parent of web/ and
+    // Apache applies them to everything below. There is no web/.htaccess.
+    const parentFile = path.join(pkg, '.htaccess')
+    const stops = (r) => r.text.split('\n').filter((l) => l.startsWith('STOP')).join(' | ')
+    const parentState = () => {
+      writeFileSync(parentFile, websupportOriginal)
+      rmSync(htFile, { force: true })
+      rmSync(path.join(web, '.htaccess.websupport-backup'), { force: true })
+      writeFileSync(path.join(web, '.htaccess.new'), ours)
+      placeSwapTool()
+    }
+    // Websupport's two files: the gate above web/ and the password file it names.
+    const htpasswdFile = path.join(fixture, '.htpasswd')
+    const htpasswdOriginal = readFileSync(htpasswdFile, 'utf8')
+    const parentUnchanged = () => readFileSync(parentFile, 'utf8') === websupportOriginal && readFileSync(htpasswdFile, 'utf8') === htpasswdOriginal
+    const probeRoutes = ['/', '/index.html', '/showcase.html', '/api/health.php', photoRoute, '/_next/', '/.htaccess.new', `/${swapSource}`]
+    const unauthenticatedStatuses = () => Promise.all(probeRoutes.map(async (route) => `${route} → ${(await get(route)).status}`))
+
+    parentState()
+    let seen = await unauthenticatedStatuses()
+    check('host state now (parent gate, no web/.htaccess, .htaccess.new uploaded): every route → 401 without the password',
+      seen.every((s) => / → 401$/.test(s)), seen.filter((s) => !/ → 401$/.test(s)).join('; '))
+    check('… with the password the uploaded files answer (no PixelMani routing yet)', (await get('/index.html', basicHeader)).status === 200)
+    // The owner's mandatory pre-install matrix (DEPLOY.md step 7), here against
+    // the local simulation over TLS; on the host it runs against staging.pixelmani.se.
+    const preinstall = () => node('scripts/verify-staging-preinstall.mjs', [`--base=https://pixelmani.test:${TLS_PORT}`, '--insecure', `--package=${pkg}`])
+    let matrixRun = preinstall()
+    check('pre-install matrix (scripts/verify-staging-preinstall.mjs) in the parent-gate state: all 9 routes 401 + Basic challenge',
+      matrixRun.status === 0 && /9 passed, 0 failed/.test(matrixRun.stdout), `${childFailure(matrixRun)} ${matrixRun.stdout.split('\n').filter((l) => l.startsWith('FAIL')).join(' | ')}`)
+    rmSync(parentFile)
+    matrixRun = preinstall()
+    check('control: the same matrix with the parent gate removed → FAILS and says STOP (it can see an exposure)',
+      matrixRun.status === 1 && /STOP: a route is not protected/.test(matrixRun.stdout) && /FAIL {2}\/index\.html/.test(matrixRun.stdout), matrixRun.stdout.trim().split('\n').slice(-3).join(' | '))
+    writeFileSync(parentFile, websupportOriginal)
+    rmSync(parentFile)
+    check('control: the same layout WITHOUT the parent gate → /index.html served without a password (the simulation is real)', (await get('/index.html')).status === 200)
+    writeFileSync(parentFile, websupportOriginal)
+
+    // The tool: detects the layout, refuses anything it cannot prove.
+    let r = await tool('action=check')
+    check('swap tool, check: layout "parent" detected, same password file, SHA-256 matches → ready',
+      r.status === 200 && /layout "parent"/.test(r.text) && /RESULT: OK/.test(r.text), stops(r))
+    // A fifth directive Apache accepts there (AuthConfig), so the tool itself must refuse.
+    writeFileSync(parentFile, `${websupportOriginal}AuthBasicProvider file\n`)
+    r = await tool('action=check')
+    check('parent .htaccess with anything beyond the four gate lines: refused, nothing changed',
+      r.status === 409 && /not exactly the four-line Basic Auth gate/.test(r.text) && !existsSync(htFile), `${r.status} ${stops(r)}`)
+    writeFileSync(parentFile, websupportOriginal)
+    writeFileSync(path.join(web, '.htaccess.new'), ours.replace(/^AuthUserFile .*$/m, 'AuthUserFile /somewhere/else/.htpasswd'))
+    r = await tool(`action=install&confirm=${token}&preflight=passed`)
+    check('a .htaccess.new with another password file (or any other byte): refused, nothing installed',
+      r.status === 409 && /SHA-256 differs/.test(r.text) && /same password file|SAME password gate/i.test(r.text) && !existsSync(htFile) && parentUnchanged(), stops(r))
+    writeFileSync(path.join(web, '.htaccess.new'), ours)
+    {
+      // Where no gate is active, a forged Authorization header must not pass:
+      // PHP fills PHP_AUTH_USER from it, Apache sets no REMOTE_USER.
+      const open = path.join(web, `pm-open-${token}`)
+      mkdirSync(open)
+      writeFileSync(path.join(open, '.htaccess'), 'Require all granted\n')
+      writeFileSync(path.join(open, swapSource), readFileSync(path.join(pkg, 'install', swapSource)))
+      const forged = await get(`/pm-open-${token}/${swapSource}?action=check`, basicHeader).then(async (x) => ({ status: x.status, text: await x.text() }))
+      check('swap tool behind NO gate with a forged Authorization header: refused (PHP_AUTH_USER is not proof)',
+        forged.status === 409 && /did not come through HTTP Basic Auth/.test(forged.text), stops(forged))
+      rmSync(open, { recursive: true, force: true })
+    }
+    rmSync(parentFile)
+    r = await tool('action=check')
+    check('no gate anywhere (neither web/ nor above): refused', r.status === 409 && /no password gate found/.test(r.text), stops(r))
+    writeFileSync(parentFile, websupportOriginal)
+
+    // Only the uploaded regular file is ever installed; a failed rename changes nothing (layout "parent").
+    const nothingAt = (file) => { try { lstatSync(file); return false } catch { return true } }
+    const parentLayoutUnchanged = () => nothingAt(htFile) && isRegular(parentFile) && parentUnchanged()
+    await incomingTypeCases('layout "parent"', parentState, parentLayoutUnchanged)
+    parentState()
+    await tool(`action=preflight&confirm=${token}`)
+    await failedRename('layout "parent"', parentLayoutUnchanged, 'rename failed; web/.htaccess was not created, the parent gate is unchanged')
+    rmSync(path.join(web, `pm-preflight-${token}`), { recursive: true, force: true })
+
+    // The install, under a hammer of unauthenticated requests.
+    parentState()
+    h = hammer()
+    const preflightParent = await tool(`action=preflight&confirm=${token}`)
+    const probeParentNoAuth = (await get(`/pm-preflight-${token}/probe.txt`)).status
+    const probeParentAuth = await get(`/pm-preflight-${token}/probe.txt`, basicHeader)
+    check('preflight in the parent layout: 401 without, 200 with the password',
+      preflightParent.status === 200 && probeParentNoAuth === 401 && probeParentAuth.status === 200 && (await probeParentAuth.text()).includes('pixelmani-preflight-ok'), stops(preflightParent))
+    let installParent = await tool(`action=install&confirm=${token}&preflight=passed`)
+    for (let retry = 0; retry < 5 && /rename failed/.test(installParent.text); retry++) {
+      check('a failed rename created nothing (retried)', !existsSync(htFile) && parentUnchanged())
+      installParent = await tool(`action=install&confirm=${token}&preflight=passed`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300)) // and right after it
+    const parentHammer = await h.stop()
+    check('install: web/.htaccess created, a regular file, exactly the package file; .htaccess.new gone',
+      installParent.status === 200 && /RESULT: OK/.test(installParent.text) && isRegular(htFile) && readFileSync(htFile, 'utf8') === ours && !existsSync(path.join(web, '.htaccess.new')), stops(installParent))
+    check('install: the parent .htaccess is still a regular file, byte for byte unchanged, and nothing was "backed up" into web/',
+      isRegular(parentFile) && parentUnchanged() && /the \.htaccess above web\/ is unchanged/.test(installParent.text) && !readdirSync(web).some((f) => /^\.htaccess\.(websupport-)?backup/.test(f)))
+    check('install: the tool deleted itself; the preflight folder is LEFT in place (reported, for manual deletion)', !existsSync(path.join(web, swapSource)) && lstatSync(path.join(web, `pm-preflight-${token}`)).isDirectory() && /LEFT {2}the preflight folder/.test(installParent.text) && !/preflight folder removed/.test(installParent.text))
+    check(`no unauthenticated response other than 401/403 during check, preflight and install (${parentHammer.total} responses, ${parentHammer.failedConnections} failed connections)`,
+      parentHammer.exposures.length === 0 && parentHammer.total >= 200, parentHammer.exposures.slice(0, 6).join('; ') || `only ${parentHammer.total} responses`)
+    check('after install: PixelMani routing works with the password (/showcase, /api/photos, /api/health)',
+      (await get('/showcase', basicHeader)).status === 200 && (await get('/api/photos', basicHeader)).status === 200 && (await get('/api/health', basicHeader)).status === 200)
+    seen = await unauthenticatedStatuses()
+    check('after install: every route still → 401 without the password', seen.every((s) => / → 40[13]$/.test(s)), seen.filter((s) => !/ → 40[13]$/.test(s)).join('; '))
+
+    // A web/.htaccess cut off anywhere (empty included) under the parent gate: never content.
+    const lines = ours.split('\n')
+    const cut = []
+    for (let n = 0; n <= lines.length; n++) {
+      writeFileSync(htFile, n ? `${lines.slice(0, n).join('\n')}\n` : '')
+      const status = (await get('/')).status
+      if (status !== 401 && status !== 500) cut.push(`after line ${n}: ${status}`)
+    }
+    check(`web/.htaccess cut off after any of its ${lines.length} lines (or empty) under the parent gate → 401 or 500, never content`, cut.length === 0, cut.join('; '))
+    writeFileSync(htFile, ours)
+    // Defence in depth: the installed file keeps the site closed even without the parent gate.
+    rmSync(parentFile)
+    check('after install, if the panel ever removed the parent gate: still 401 without the password',
+      (await get('/')).status === 401 && (await get(photoRoute)).status === 401 && (await get('/api/photos')).status === 401)
+    writeFileSync(parentFile, websupportOriginal)
+    // Control: why web/ may never grant (Apache's default AuthMerging Off: the
+    // child's Require replaces the parent's), whatever the parent says.
+    writeFileSync(htFile, 'Require all granted\n')
+    check('control: a web/.htaccess that grants → content WITHOUT a password despite the parent gate', (await get('/index.html')).status === 200)
+    writeFileSync(htFile, ours)
+
+    // Back to the layout 4b expects (web gate only); runs A/B below use the parent layout again.
+    rmSync(parentFile)
+    check('restored for 4b: web gate only', (await get('/')).status === 401 && (await get('/', basicHeader)).status === 200)
   }
 
   // -------------------------------------------------------------------------
@@ -324,6 +556,9 @@ try {
 
   // -------------------------------------------------------------------------
   section('5. Run A: APP_ENV=local over http (matrix + verify, admin, contact → Mailpit)')
+  // Runs A and B use the account's real state after activation: Websupport's
+  // gate above web/ AND the package's web/.htaccess with the same gate.
+  writeFileSync(path.join(pkg, '.htaccess'), readFileSync(authFile, 'utf8'))
   // Websupport's default welcome page, left in web/ by mistake, must never be served.
   writeFileSync(path.join(web, 'index.php'), '<?php echo "WEBSUPPORT-DEFAULT-PAGE";')
   serve('start', env)
@@ -399,5 +634,5 @@ Admin: ${adminPassword}
   }
 }
 
-console.log(`\n${pass} passed, ${fail} failed`)
+console.log(`\n${pass} passed, ${fail} failed${skipped.length ? `, ${skipped.length} SKIPPED (not run on this machine: see the SKIP lines)` : ''}`)
 process.exitCode = fail ? 1 : 0
